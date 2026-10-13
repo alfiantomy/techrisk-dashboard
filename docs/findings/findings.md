@@ -363,3 +363,28 @@ Three-angle audit (unified API response, DRY, OOP/architecture). Each finding ha
 
 ### [A-7] Export action surface (2026-09-29, resolved same day — kept as record)
 Export logic briefly lived as a 362-line multi-class file + inline form/handler in `ListIncidents`. Resolved in bf40c08: one class per file under `Exports/` + `Exports/Sheets/`, form+filters extracted to `Filament/Actions/ExportActionSchema`, stats shared via `Statistics/IncidentStatsFooterData`. Recorded so future exports follow the split, not the monolith.
+
+### Register data-quality claims audit — 2026-10-13 (source: VP TechOps gap analysis 2026-10-07)
+
+The "Root cause — register design works against reliability" block in `detection-response-gap-2026-ytd-v2.pdf` §6 (p.16) was fact-checked against the code and the 38-record workbook (`root-cause-attribution-38-2026-ytd.xlsx`). Verdicts:
+
+| Claim | Verdict | Evidence |
+|-------|---------|----------|
+| "No input validation" | **Partial** | Filament form hardened 2026-09-29 (`IncidentResource.php:167-196`: `maxDate(now())`, `afterOrEqual`, `numeric`+`minValue(0)`). BUT API requests (`StoreIncidentRequest.php:30-40`, `UpdateIncidentRequest.php`) accept future dates/negatives — no `maxDate`/`afterOrEqual`/`minValue`, `recovered_fund` unvalidated; both import paths (`Filament/Importers/IssuesImporter.php:26-29,98`, `Imports/IssuesImport.php:47-55`) allow future dates, importer forces `startOfDay()` = 00:00:00 |
+| "Hence 15 negative MTTRs" (data error) | **Misleading** | Negative MTTR is the deliberate day-unit encoding: `Incident.php:453-456` `shouldCalculateMttrByDays()` (fund_status ∈ Confirmed loss/Potential recovery/Fully recovered/Non Tech Loss) → `mttr = -(days+1)` (`IncidentMetricsCalculator.php:63-69`). **Measured on prod export (All Cases, 85 rows, 2026-10-13): 35 negative MTTRs, 100% in the encoding set** (Confirmed loss 15 — the report's exact 15 — Non Tech Loss 12, Fully recovered 6, Potential recovery 2), zero negatives outside it. Date-entry errors would not segregate perfectly by fund status; the encoding does |
+| "Placeholder times 00:00:00, 12:00:00 possible" | **True** (measured) | **Prod export: 36 of 85 rows (42%) have placeholder incident-date times — 17× 00:00:00, 19× 12:00:00** (12:00:00 is a clear "time unknown" convention). `DateTimePicker` keeps a time component with no unknown-time handling; importer forces 00:00:00 (`IssuesImporter.php:98`) |
+| "Action items require manual transcription" | **Partial** | Manual entry is the main path, but `WarRoomService.php:1224-1252` drafts action improvements from an AI retrospective (user-triggered, `status: draft`). No extraction from uploaded investigation documents |
+| "No RCA completeness enforcement before closure" | **True** (measured: 28 of 66 Completed rows have empty root cause — 42%, worse than the report's 6/38) | No gate anywhere: status Select (`IncidentResource.php:141-145`), Update Status action (`:568-593`), observer — only a `missing_root_cause` table *filter* (`:545-555`) |
+| "No input validation" (data consequence) | **Contradicted by data** | Prod export: **0 future dates, 0 discovered<incident, 0 stop_bleeding<incident, 0 negative fund values** across 85 rows — current data has zero hard-rule violations; the API/import bypass (below) is latent, not visible in the register yet |
+| "Does not flag overdue action items" | **Partial** | Daily 08:00 overdue emails/notifications exist (`SendActionImprovementReminders.php:16-58`) but only for rows with `reminder=true` AND status pending (per-row opt-in); NO overdue badge/column in the relation-manager UI (`ActionImprovementsRelationManager.php:57-71`) |
+| "No way to record 'started X days before discovery'" | **True** | Only free-text `timeline` column (`2026_01_14_000001`); no structured estimated-start/start-unknown field in any migration |
+
+**Open gaps (confirmed, unfixed):** RD-1 API+import validation bypass · RD-3 no in-UI overdue indicator (and email flagging is opt-in per row) · RD-5 day-granularity MTTR makes fund-loss timing unusable for detection/response metrics (the legitimate kernel of the report).
+
+**Closed 2026-10-13 (PROJ-011 Waves 1–2):**
+- **RD-2 → closed:** closure gate in `IncidentObserver::saving()` — a row cannot move INTO Completed (create or update) without RCA (root_cause, 'N/A' passes as deliberate override, or root_cause_category) and stop_bleeding_at. One guard covers edit form, `update_status`, API, imports. Pre-gate Completed rows stay editable.
+- **RD-4 → closed:** `detection_delay_days` + `start_time_known` columns (`2026_10_13_000001`, prod migrate = owner-only guardrail) + `Incident::startTimeKnown()`/`effectiveDetectionLagHours()` — the placeholder-time problem has a structured escape hatch: book the date, record the estimated gap, flag whether the time is real. Governance KPIs consume it: placeholder rows yield no derived lag unless delay-days exist.
+- RD-5 mitigated, not fixed: day-granularity MTTR stays (legacy encoding), but the detection-lag KPIs measure timing from `discovered_at`/delay-days instead of MTTR.
+- RD-1 unchanged (API/import validation bypass remains latent — no imports in active use).
+
+**KPI conflict:** `techops-pdr-action-plan-2026-v1.pdf` Panel 5 sets "Negative MTTR: green=0 / red=>0" — unachievable as written while negative = days encoding (it tracks Confirmed-loss count, not data quality). **Resolved 2026-10-13:** the Governance page implements the replacement KPI — "FL usable timing %" (share of Confirmed-loss rows with real timing), plus "FL Unknown Channel %" (PDR red >5%) once `detected_via` is backfilled.

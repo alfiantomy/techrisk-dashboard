@@ -327,6 +327,33 @@ Owner request 2026-10-01: one button holding "memory of all incidents" every Age
 
 ---
 
+### [PROJ-011] Prevention/Detection Program — governance scorecard, lag analytics, closure gate
+
+**Status:** All 3 waves done (code complete; Wave 2 prod migrate pending owner)
+**Priority:** P1
+**Start Date:** 2026-10-13
+
+#### Description
+Owner request 2026-10-13 (grounded in the VP TechOps PDFs: `detection-response-gap-2026-ytd-v2.pdf`, `techops-pdr-action-plan-2026-v1.pdf`): make the Portal measure prevention/detection patterns, not just record incidents. Scope boundary: SLO burn-rate alerting / real-time anomaly detection are SRE-platform items, NOT this app. Approved as 3 independently-shippable waves. KPI substitution per the 2026-10-13 findings audit: PDR's "Negative MTTR = 0" is unimplementable (negative = day-unit encoding for fund-status rows) → replaced by "FL usable timing %".
+
+**Wave 1 (done 2026-10-13, no migrations):** `Services/Governance/GovernanceKpiService` (single KPI implementation — register completeness, RCA-within-5d from the audits table with coverage, overdue pending action items, quarterly recurrence from `recurrence_data.is_recurring`, detection-lag medians by stream, usable-timing %, placeholder-time count; `aiCounts()` scope + current-year period; 15-min cache keyed on `dashboard_cache_version`) + GovernancePage (nav Reports, `manage incidents`) + `GovernanceKpiOverview` (RAG stat cards per PDR §10) + `DetectionLagChart` (median lag by quarter, FL vs NFL). Both widgets `$isLazy = false` — Filament lazy skeletons hide labels from first paint AND from `Livewire::test` page renders (that was the last Wave-1 bug).
+
+**Wave 2 (done 2026-10-13, code complete — prod migrate pending owner):** `DetectedVia` + `FailedControl` enums; migration `2026_10_13_000001` (`detected_via`, `failed_control`, `detection_delay_days`, `start_time_known`); Incident casts + `startTimeKnown()`/`effectiveDetectionLagHours()`; Timeline-tab form fields + table badge columns + 2 filters; **closure gate in `IncidentObserver::saving()`** (ValidationException on any transition INTO Completed without RCA or stop-bleed — covers form, `update_status`, API, imports; 'N/A' root_cause passes as deliberate override; legacy Completed rows stay editable; documented exception to the "observers never block" rule); observer trigger list + 4 fields; export columnOptions (the existing BackedEnum coercion in both export mappers renders the new enums); GovernanceKpiService v2: timing KPIs via `effectiveDetectionLagHours()` + new FL unknown-channel % stat (PDR red >5%). The gate's test fallout: ~14 test files updated (completed fixtures now carry root_cause + stop_bleeding_at; deliberately-incomplete rows use `createQuietly` as legacy-row simulation).
+
+**Wave 3 (done 2026-10-13):** overdue indicator on `ActionImprovementsRelationManager` (due_date renders danger/bold with an `overdue` description when pending + past due — RD-3; `isOverdue()` helper, display-only); quarterly recurrence KPI panel (shipped with Wave 1 — `ragZero(1)` RAG on the overview); `RootCauseFundParetoChart` on the Governance page — fund_loss per root_cause_category value, widget-aligned scope (`aiCounts()` + Completed), multi-category rows split evenly so bars sum to the total, uncategorised loss kept visible as `(uncategorized)`, top 8 + cumulative-% line (dual axis), cached `rca_fund_pareto_v1_*` on `dashboard_cache_version`. AI failed-control suggestion = follow-up, not built (hook point: `callAiForJson` + ViewIncident action, pattern `PostMortemService`).
+
+#### Tasks
+- [x] Wave 1: service + page + 2 widgets + blade + 11 tests (9 unit service / 2 feature page) — 2026-10-13
+- [x] Wave 1: docs (CLAUDE.md dependency map + baseline 791/2670) — 2026-10-13
+- [x] Wave 2: enums + migration + model + form/table + closure gate + exports + 16 tests (IncidentClosureGateTest 8 / DetectionFieldsTest 8) — 2026-10-13
+- [x] Wave 2: docs (CLAUDE.md observer/model/governance rows + architecture-rule exception; findings.md RD-2/RD-4 closed) — 2026-10-13
+- [x] Wave 3: overdue badge + Pareto chart + 4 tests (recurrence KPI was Wave 1) — 2026-10-13; baseline now 811/2705
+- [x] Follow-up (owner rule 2026-10-13): fund-loss MTTR = elapsed calendar days, no `+1` (02→09 Oct = 7, was 8) — one-line `computeMttr()` change, +2 tests, baseline 813/2710; **owner runs `incidents:recalculate-metrics` on prod after deploy** (local dev already recalced)
+- [ ] Wave 2: **owner runs `php artisan migrate --force` on prod** (owner-only guardrail), then backfill `detected_via` on Confirmed-loss rows (FL Unknown Channel % starts at 100%)
+- [ ] Owner live check: Governance page RAG cards + Pareto match expectations on prod data (`docker compose restart app` for OPcache after deploy)
+
+---
+
 ### [PROJ-010] Multi-PIC incidents + working Netcore email
 
 **Status:** Done (code complete, awaiting prod deploy)
@@ -379,4 +406,4 @@ Owner request 2026-10-01: similar-incident detection "is not accurate" (irreleva
 
 ---
 
-*Last Updated: 2026-10-01*
+*Last Updated: 2026-10-13*
