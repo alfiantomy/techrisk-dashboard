@@ -20,8 +20,10 @@ class ReminderMail
 {
     /**
      * @param  iterable<User>|Collection<int, User>  $recipients
+     * @return int mail-eligible recipients actually on the send (0 = no
+     *             email went out, e.g. everyone's preference is off)
      */
-    public static function send(iterable|Collection $recipients, BaseNotification $notification): void
+    public static function send(iterable|Collection $recipients, BaseNotification $notification): int
     {
         $eligible = collect($recipients)
             ->filter()
@@ -30,10 +32,12 @@ class ReminderMail
             ->values();
 
         if ($eligible->isEmpty()) {
-            return;
+            return 0;
         }
 
         Mail::to($eligible->all())
             ->send(new GroupNotificationMail($notification->toMailForGroup($eligible->all())));
+
+        return $eligible->count();
     }
 }

@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Observers;
 
 use App\Models\ActionImprovement;
@@ -9,6 +10,18 @@ use App\Notifications\ActionImprovementAssigned;
 
 class ActionImprovementObserver
 {
+    /**
+     * Normalize pic_email tags ("Name <email>" suggestions from the directory
+     * become bare emails) and upsert every address into the user directory
+     * (owner request 2026-10-13) before anything else reads them.
+     */
+    public function saving(ActionImprovement $actionImprovement): void
+    {
+        if (is_array($actionImprovement->pic_email) && $actionImprovement->pic_email !== []) {
+            $actionImprovement->pic_email = User::upsertFromPicEmails($actionImprovement->pic_email);
+        }
+    }
+
     /**
      * Handle the ActionImprovement "created" event.
      */

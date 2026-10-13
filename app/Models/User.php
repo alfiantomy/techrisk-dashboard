@@ -30,6 +30,13 @@ class User extends Authenticatable implements Auditable, FilamentUser
             return false;
         }
 
+        // Directory-only contact (auto-created from an action-improvement
+        // PIC email) — flip can_login in User Management to grant access.
+        // Strict false: a not-yet-hydrated null must never block a real user.
+        if ($this->can_login === false) {
+            return false;
+        }
+
         // Check if user's access has expired
         if ($this->isAccessExpired()) {
             return false;
@@ -161,6 +168,7 @@ class User extends Authenticatable implements Auditable, FilamentUser
             \App\Notifications\ActionImprovementReminder::class => 'action_improvement_reminder',
             \App\Notifications\ActionImprovementDueSoon::class => 'action_improvement_reminder',
             \App\Notifications\ActionImprovementOverdue::class => 'action_improvement_overdue',
+            \App\Notifications\ActionImprovementEscalated::class => 'action_improvement_escalated',
             \App\Notifications\ActionImprovementAssigned::class => 'action_improvement_assigned',
             \App\Notifications\AdminAnnouncement::class => 'admin_announcement',
             \App\Notifications\IncidentNotDoneReminder::class => 'incident_not_done_reminder',
@@ -193,6 +201,8 @@ class User extends Authenticatable implements Auditable, FilamentUser
         'password',
         'access_expiry',
         'is_service_account',
+        'can_login',
+        'manager_id',
     ];
 
     /**
@@ -217,7 +227,100 @@ class User extends Authenticatable implements Auditable, FilamentUser
             'access_expiry' => 'datetime',
             'password' => 'hashed',
             'is_service_account' => 'boolean',
+            'can_login' => 'boolean',
         ];
+    }
+
+    /**
+     * Org tree (owner request 2026-10-13): drives action-improvement
+     * escalation up the manager chain.
+     */
+    public function manager()
+    {
+        return $this->belongsTo(self::class, 'manager_id');
+    }
+
+    /**
+     * The form tag format — "Name <email>" (from our own suggestions) or a
+     * bare email. Returns [?name, email] or null when the tag is garbage.
+     *
+     * @return array{0: ?string, 1: string}|null
+     */
+    public static function parsePicEmailTag(string $tag): ?array
+    {
+        if (preg_match('/^(.*?)<\s*([^<>\s]+@[^<>\s]+)\s*>$/', trim($tag), $m)) {
+            $name = trim($m[1]);
+            $email = strtolower($m[2]);
+
+            return filter_var($email, FILTER_VALIDATE_EMAIL) ? [($name !== '' ? $name : null), $email] : null;
+        }
+
+        $email = strtolower(trim($tag));
+
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? [null, $email] : null;
+    }
+
+    /**
+     * Single home of the PIC directory (owner request 2026-10-13): parse form
+     * tags (bare emails or "Name <email>" suggestions), upsert every address
+     * as a user, and return the normalized bare-email array to store on
+     * pic_email — downstream User-matching and mail are unchanged, except
+     * these contacts now actually receive the reminder emails.
+     *
+     * Directory rows are login-disabled (can_login=false, random password);
+     * flip the toggle in User Management when a contact needs access.
+     *
+     * @param  list<string>  $tags
+     * @return list<string>
+     */
+    public static function upsertFromPicEmails(array $tags): array
+    {
+        $emails = [];
+        $namesByEmail = [];
+
+        foreach ($tags as $tag) {
+            if ($parsed = self::parsePicEmailTag((string) $tag)) {
+                [$name, $email] = $parsed;
+                $emails[$email] = $email;
+                $namesByEmail[$email] ??= $name;
+            }
+        }
+
+        foreach ($emails as $email) {
+            self::firstOrCreate(
+                ['email' => $email],
+                [
+                    'name' => $namesByEmail[$email] ?? strtok($email, '@'),
+                    // Random + unknowable: access is granted via the
+                    // can_login toggle, never this password.
+                    'password' => \Illuminate\Support\Str::password(40),
+                    'can_login' => false,
+                ],
+            );
+        }
+
+        return array_values($emails);
+    }
+
+    /**
+     * The ancestor exactly $level steps up the manager chain. Null when the
+     * chain is shorter or loops.
+     */
+    public function ancestorAt(int $level): ?self
+    {
+        $current = $this;
+        $seen = [$this->id];
+
+        for ($i = 0; $i < $level; $i++) {
+            $manager = $current->manager()->first();
+            if (! $manager || in_array($manager->id, $seen)) {
+                return null;
+            }
+            $seen[] = $manager->id;
+            $current = $manager;
+        }
+
+        return $current;
     }
 
     public function scopeServiceAccounts($query): void

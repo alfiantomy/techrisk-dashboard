@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserResource\Pages;
@@ -45,9 +46,19 @@ class UserResource extends Resource
                     ->multiple()
                     ->relationship('roles', 'name')
                     ->preload(),
+                Select::make('manager_id')
+                    ->label('Manager')
+                    ->relationship('manager', 'name', modifyQueryUsing: fn ($query) => $query->humanUsers()->orderBy('name'))
+                    ->searchable()
+                    ->preload()
+                    ->helperText('Org tree — overdue action-improvement escalations climb this chain'),
                 Forms\Components\Section::make('Access Settings')
                     ->description('Configure user access and expiry')
                     ->schema([
+                        Forms\Components\Toggle::make('can_login')
+                            ->label('Can log in to the dashboard')
+                            ->helperText('Directory-only contacts (auto-created from action-improvement PIC emails) are off — flip this to grant access. API tokens are unaffected.')
+                            ->default(true),
                         Forms\Components\DateTimePicker::make('access_expiry')
                             ->label('Access Expires At')
                             ->helperText('If set, user will not be able to access the dashboard after this date')
@@ -114,12 +125,20 @@ class UserResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn ($query) => $query->with('roles'))
+            ->modifyQueryUsing(fn ($query) => $query->with(['roles', 'manager']))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('email')
                     ->searchable(),
+                Tables\Columns\IconColumn::make('can_login')
+                    ->label('Login')
+                    ->boolean()
+                    ->tooltip(fn ($record) => $record->can_login ? null : 'Directory-only contact — flip Can log in to grant access')
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('manager.name')
+                    ->label('Manager')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('roles.name')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('access_expiry')

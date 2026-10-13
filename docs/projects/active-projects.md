@@ -354,6 +354,43 @@ Owner request 2026-10-13 (grounded in the VP TechOps PDFs: `detection-response-g
 
 ---
 
+### [PROJ-013] PIC directory on users + org-tree escalation
+
+**Status:** Done (code complete; prod migrate pending owner)
+**Priority:** P2
+**Start Date:** 2026-10-13
+
+#### Description
+Owner request 2026-10-13 ("cari nama" + "escalate ke atasnya seperti org tree"), redirected mid-build from a separate `pic_contacts` table to **reusing the users table** (owner: "Reuse user login table... make them cannot login... give access"). Every action-improvement PIC email is auto-saved as a login-disabled directory user by `User::upsertFromPicEmails()` (single home; observer `saving()` normalizes `Name <email>` suggestion tags to bare emails, existing users never touched); the relation-manager TagsInput now suggests users by name ("Name <email>"). Login gate: `users.can_login` defaults TRUE in migration `2026_10_13_000003` so every existing non-expired user keeps logging in; directory rows are `can_login=false` (random password) — flip the toggle in User Management to grant access; API/Sanctum routes never pass the panel gate. `manager_id` self-relation is the org tree, curated in UserResource (Select + Login column). Overdue escalation in `SendActionImprovementReminders`: level = `min(daysOverdue/14, 3)` — ≥2wk → manager, ≥4wk → one higher, capped at 3; fires every unreached rung on first run (deep-overdue rows inform each rung passed), stops at chain depth, one `ActionImprovementEscalated` mail per rung that deliberately bypasses mail preferences (owner mandate) + in-app rows; `escalation_level`/`last_escalated_at` persisted. Intended behavior change: directory PICs (previously non-User emails that received NOTHING) now get reminder + assigned emails like everyone.
+
+#### Tasks
+- [x] Migration 000003 (can_login default true, manager_id self-FK, escalation columns) — 2026-10-13
+- [x] User: upsertFromPicEmails + parsePicEmailTag + manager()/ancestorAt + canAccessPanel gate (strict `=== false`) — 2026-10-13
+- [x] Observer + command swap to users directory; escalation ladder cumulative — 2026-10-13
+- [x] Form suggestions + validation; UserResource can_login/manager fields + columns — 2026-10-13
+- [x] 6 tests (UserDirectoryEscalationTest) — 2026-10-13; baseline 823/2767
+- [ ] Owner runs `php artisan migrate --force` on prod (same run covers 000001–000003), then curates manager chains in User Management (empty chain = no escalation)
+
+---
+
+### [PROJ-012] Action Improvement reminder tracking + frequency throttle
+
+**Status:** Done (code complete; prod migrate pending owner)
+**Priority:** P2
+**Start Date:** 2026-10-13
+
+#### Description
+Owner request 2026-10-13 ("auto save email that have been sended"). Every reminder email sent for an action improvement is now recorded on the row: `last_reminded_at` + `reminders_sent` (migration `2026_10_13_000002`), written by `ActionImprovement::recordReminderSent()` from both send paths (08:00 scheduled command + relation-manager Email button) whenever `ReminderMail::send()` actually mailed someone (returns int now — 0 means everyone's mail preference was off, and then nothing is recorded). The relation manager shows a "Last email" column with the sent count. `reminder_frequency` (weekly/biweekly) — a form field nothing ever read — now throttles the daily overdue batch via `last_reminded_at`; null frequency stays daily. Bonus bug fix found by the new tests: the command's `usersByEmail` prefetch ran AFTER the due-soon loop, so due-soon emails only ever reached incident PICs, never `pic_email`-matched users (existing tests masked it by attaching pics to the incident).
+
+#### Tasks
+- [x] Migration + model (recordReminderSent) + ReminderMail int return — 2026-10-13
+- [x] Command: throttle + record both batches + prefetch-order fix — 2026-10-13
+- [x] Relation manager: record + honest toasts (mailed vs preference-filtered) + Last email column — 2026-10-13
+- [x] 4 tests (ActionImprovementReminderTrackingTest; first-ever coverage of the Email button) — 2026-10-13; baseline 817/2736
+- [ ] Owner runs `php artisan migrate --force` on prod (one run now covers `2026_10_13_000001`–`000003`)
+
+---
+
 ### [PROJ-010] Multi-PIC incidents + working Netcore email
 
 **Status:** Done (code complete, awaiting prod deploy)

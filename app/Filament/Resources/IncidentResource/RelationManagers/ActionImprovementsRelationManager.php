@@ -39,7 +39,24 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->required(),
                 Forms\Components\TagsInput::make('pic_email')
                     ->required()
-                    ->nestedRecursiveRules(['email']),
+                    ->suggestions(fn () => User::humanUsers()
+                        ->orderBy('name')
+                        ->limit(100)
+                        ->get()
+                        ->map(fn ($u) => "{$u->name} <{$u->email}>")
+                        ->all())
+                    ->helperText('Pick a suggestion to search by name — new emails are saved to the directory automatically.')
+                    ->rules([
+                        // Accepts bare emails or "Name <email>" suggestion
+                        // tags — normalized to bare emails by the observer.
+                        fn () => function (string $attribute, array $value, \Closure $fail) {
+                            foreach ($value as $tag) {
+                                if (! User::parsePicEmailTag((string) $tag)) {
+                                    $fail("{$tag} is not a valid email (or \"Name <email>\") tag.");
+                                }
+                            }
+                        },
+                    ]),
                 Forms\Components\Toggle::make('reminder'),
                 Forms\Components\Select::make('reminder_frequency')
                     ->options([
@@ -81,6 +98,11 @@ class ActionImprovementsRelationManager extends RelationManager
                         'done' => 'success',
                         default => 'secondary',
                     }),
+                Tables\Columns\TextColumn::make('last_reminded_at')
+                    ->label('Last email')
+                    ->dateTime()
+                    ->placeholder('—')
+                    ->description(fn ($record): ?string => $record->reminders_sent > 0 ? $record->reminders_sent.' reminder(s) emailed' : null),
             ])
             ->filters([
                 //
@@ -104,12 +126,15 @@ class ActionImprovementsRelationManager extends RelationManager
                             ->values();
 
                         // One combined email for all recipients (owner 2026-10-09)
-                        // plus the per-user in-app notification.
+                        // plus the per-user in-app notification; the send is
+                        // recorded on the row (owner 2026-10-13).
                         $recipients->each(fn ($user) => $user->notify(new ActionImprovementReminder($record)));
-                        ReminderMail::send($recipients, new ActionImprovementReminder($record));
+                        $mailed = ReminderMail::send($recipients, new ActionImprovementReminder($record));
+                        $record->recordReminderSent($mailed);
 
                         Notification::make()
-                            ->when($recipients->isNotEmpty(), fn ($n) => $n->success()->title('Reminder sent')->body('Email sent to '.$recipients->count().' recipient(s).'))
+                            ->when($recipients->isNotEmpty() && $mailed > 0, fn ($n) => $n->success()->title('Reminder sent')->body('Email sent to '.$mailed.' recipient(s).'))
+                            ->when($recipients->isNotEmpty() && $mailed === 0, fn ($n) => $n->warning()->title('No email sent')->body('Recipients exist but none have email reminders enabled in their preferences.'))
                             ->when($recipients->isEmpty(), fn ($n) => $n->warning()->title('No matching users')->body('No registered users matched the PIC email(s).'))
                             ->send();
                     }),
