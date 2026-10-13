@@ -44,6 +44,42 @@ class RecalculateMetricsCommandTest extends TestCase
         );
     }
 
+    public function test_fund_loss_mttr_is_elapsed_calendar_days(): void
+    {
+        // Owner rule 2026-10-13: elapsed days, time-of-day ignored — 02→09 Oct
+        // = 7 days (the old +1 convention would have stored -8).
+        $incident = Incident::factory()->create([
+            'severity' => 'X4',
+            'classification' => 'Incident',
+            'fund_status' => 'Confirmed loss',
+            'incident_date' => '2026-10-02 12:00:00',
+            'stop_bleeding_at' => '2026-10-09 17:57:00',
+        ]);
+
+        $this->artisan('incidents:recalculate-metrics', ['--year' => '2026'])
+            ->assertSuccessful();
+
+        $this->assertSame(-7.0, (float) $incident->refresh()->mttr);
+    }
+
+    public function test_fund_loss_mttr_same_day_resolves_to_zero(): void
+    {
+        // Previously impossible under the +1 convention; 0 now joins the
+        // minutes (>= 0) bucket on every reading surface.
+        $incident = Incident::factory()->create([
+            'severity' => 'X4',
+            'classification' => 'Incident',
+            'fund_status' => 'Confirmed loss',
+            'incident_date' => '2026-10-02 09:00:00',
+            'stop_bleeding_at' => '2026-10-02 17:57:00',
+        ]);
+
+        $this->artisan('incidents:recalculate-metrics', ['--year' => '2026'])
+            ->assertSuccessful();
+
+        $this->assertSame(0.0, (float) $incident->refresh()->mttr);
+    }
+
     public function test_dry_run_leaves_values_untouched(): void
     {
         $incident = Incident::factory()->create([

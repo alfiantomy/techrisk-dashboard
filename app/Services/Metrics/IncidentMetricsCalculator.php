@@ -43,8 +43,10 @@ class IncidentMetricsCalculator
     }
 
     /**
-     * MTTR: minutes (positive) normally, days (negative, +1 to include both
-     * days) when fund status puts resolution on a day granularity.
+     * MTTR: minutes (positive) normally, elapsed calendar days (negative,
+     * time-of-day ignored, owner rule 2026-10-13 — replaces the old "+1 to
+     * include both days" convention) when fund status puts resolution on a
+     * day granularity. Same-day resolution stores 0 (joins the minutes path).
      */
     public function computeMttr(Incident $incident): void
     {
@@ -62,7 +64,7 @@ class IncidentMetricsCalculator
 
         if ($incident->shouldCalculateMttrByDays()) {
             $days = abs($incident->incident_date->startOfDay()
-                ->diffInDays($incident->stop_bleeding_at->startOfDay())) + 1;
+                ->diffInDays($incident->stop_bleeding_at->startOfDay()));
             $incident->mttr = -$days;
         } else {
             $incident->mttr = $incident->incident_date->diffInMinutes($incident->stop_bleeding_at);
