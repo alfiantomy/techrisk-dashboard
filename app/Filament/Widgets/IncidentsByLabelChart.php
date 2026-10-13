@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Filament\Widgets;
 
 use App\Filament\Concerns\HasChartColors;
@@ -13,7 +14,7 @@ class IncidentsByLabelChart extends ChartWidget
 {
     use HasChartColors, InteractsWithDashboardFilters;
 
-    protected static ?string $heading = 'Incidents by Label';
+    protected static ?string $heading = 'Incidents by Label (Top 5)';
 
     protected int|string|array $columnSpan = 6;
 
@@ -28,6 +29,7 @@ class IncidentsByLabelChart extends ChartWidget
             'end_date' => $this->end_date,
             'year' => now()->year,
             'v' => Cache::get('dashboard_cache_version', 0),
+            'limit' => 5,
         ]));
 
         $data = Cache::remember($cacheKey, now()->addMinutes(15), function () {
@@ -41,7 +43,12 @@ class IncidentsByLabelChart extends ChartWidget
                     }
                 }]);
 
-            return $query->pluck('incidents_count', 'name')->filter(fn ($c) => $c > 0);
+            // Top 5 only: unbounded bars overflow the fixed widget height and
+            // Chart.js silently skips y-axis labels, so bars appear unlabeled.
+            return $query->pluck('incidents_count', 'name')
+                ->filter(fn ($c) => $c > 0)
+                ->sortDesc()
+                ->take(5);
         });
 
         $count = $data->count();

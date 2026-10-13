@@ -15,7 +15,7 @@ class IncidentsByPicChart extends ChartWidget
 {
     use HasChartColors, InteractsWithDashboardFilters;
 
-    protected static ?string $heading = 'Incidents by Person In Charge';
+    protected static ?string $heading = 'Incidents by Person In Charge (Top 5)';
 
     protected int|string|array $columnSpan = 6;
 
@@ -30,6 +30,7 @@ class IncidentsByPicChart extends ChartWidget
             'end_date' => $this->end_date,
             'year' => now()->year,
             'v' => Cache::get('dashboard_cache_version', 0),
+            'limit' => 5,
         ]));
 
         $data = Cache::remember($cacheKey, now()->addMinutes(15), function () {
@@ -45,7 +46,9 @@ class IncidentsByPicChart extends ChartWidget
                 $query->whereYear('incidents.incident_date', now()->year);
             }
 
-            return $query->pluck('total', 'pic_name');
+            // Top 5 only — same reason as IncidentsByLabelChart (fixed widget
+            // height, Chart.js skips labels that don't fit).
+            return $query->pluck('total', 'pic_name')->sortDesc()->take(5);
         });
 
         $count = $data->count();
