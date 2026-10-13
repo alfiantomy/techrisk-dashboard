@@ -85,6 +85,7 @@ class SimilarIncidentServiceTest extends TestCase
         return Incident::factory()->create(array_merge([
             'severity' => Severity::P2,
             'incident_status' => IncidentStatus::Completed,
+            'stop_bleeding_at' => now(),
             'classification' => IncidentClassification::Incident,
             'incident_date' => now()->subMonth(),
             'root_cause' => 'Database connection pool exhaustion under peak load.',

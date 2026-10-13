@@ -30,7 +30,7 @@ class IncidentsResourceTest extends DuskTestCase
             'incident_date' => now()->subDays(rand(1, 30)),
             'entry_date_tech_risk' => now()->subDays(rand(1, 30)),
             'classification' => 'Incident',
-            'incident_status' => ['Open', 'In progress', 'Finalization', 'Completed'][rand(0, 3)],
+            'incident_status' => ['Open', 'In progress', 'Finalization'][rand(0, 2)],
             'incident_source' => 'Internal',
         ]);
     }

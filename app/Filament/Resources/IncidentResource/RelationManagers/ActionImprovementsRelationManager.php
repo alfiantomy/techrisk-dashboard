@@ -18,6 +18,13 @@ class ActionImprovementsRelationManager extends RelationManager
 {
     protected static string $relationship = 'actionImprovements';
 
+    private function isOverdue($record): bool
+    {
+        return $record->status === 'pending'
+            && $record->due_date !== null
+            && $record->due_date->isBefore(today());
+    }
+
     public function form(Form $form): Form
     {
         return $form
@@ -57,7 +64,12 @@ class ActionImprovementsRelationManager extends RelationManager
             ->columns([
                 Tables\Columns\TextColumn::make('title'),
                 Tables\Columns\TextColumn::make('due_date')
-                    ->date(),
+                    ->date()
+                    // RD-3: overdue pending rows are visible in-UI, not just
+                    // in the opt-in reminder emails.
+                    ->color(fn ($record): string => $this->isOverdue($record) ? 'danger' : 'default')
+                    ->weight(fn ($record): string => $this->isOverdue($record) ? 'bold' : 'normal')
+                    ->description(fn ($record): ?string => $this->isOverdue($record) ? 'overdue' : null),
                 Tables\Columns\TextColumn::make('pic_email'),
                 Tables\Columns\IconColumn::make('reminder')
                     ->boolean(),

@@ -12,7 +12,6 @@ use App\Services\Ai\AiTextService;
 use App\Services\Ai\PostMortemService;
 use App\Services\Markdown\IncidentMarkdownExporter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Mockery;
 use Mockery\MockInterface;
 use Tests\TestCase;
 
@@ -43,7 +42,7 @@ class PostMortemServiceTest extends TestCase
     {
         return Incident::factory()->create([
             'severity' => Severity::P2,
-            'incident_status' => IncidentStatus::Completed,
+            'incident_status' => IncidentStatus::Completed, 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'classification' => IncidentClassification::Incident,
             'incident_date' => now()->subMonth(),
         ]);

@@ -44,7 +44,7 @@ class WeeklyReportTest extends DuskTestCase
         Incident::factory()->count(5)->create([
             'incident_date' => now()->subYear()->startOfWeek(),
             'classification' => 'Incident',
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'incident_source' => 'Internal',
         ]);
     }

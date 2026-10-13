@@ -40,6 +40,8 @@ class ExportActionSchema
             'business_category' => 'Business Category',
             'root_cause_category' => 'Root Cause Category',
             'responsible_team' => 'Responsible Team',
+            'detected_via' => 'Detected Via',
+            'failed_control' => 'Failed Control',
         ];
     }
 

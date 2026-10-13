@@ -47,7 +47,7 @@ class UserFacingCrashersTest extends TestCase
         $incident = Incident::first();
 
         $incident->update([
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'remark' => 'wrapped up',
         ]);
 

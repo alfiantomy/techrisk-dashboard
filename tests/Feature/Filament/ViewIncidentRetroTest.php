@@ -43,7 +43,7 @@ class ViewIncidentRetroTest extends TestCase
     {
         return Incident::factory()->create(array_merge([
             'severity' => Severity::P2,
-            'incident_status' => IncidentStatus::Completed,
+            'incident_status' => IncidentStatus::Completed, 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'classification' => IncidentClassification::Incident,
             'incident_date' => now()->subMonth(),
         ], $overrides));

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources;
 
+use App\Enums\DetectedVia;
+use App\Enums\FailedControl;
 use App\Enums\FundStatus;
 use App\Enums\IncidentClassification;
 use App\Enums\IncidentStatus;
@@ -22,6 +24,7 @@ use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -142,7 +145,8 @@ class IncidentResource extends Resource
                                             ->options(IncidentStatus::options())
                                             ->required()
                                             ->default('Open')
-                                            ->live(),
+                                            ->live()
+                                            ->helperText('Completing requires a root cause and a stop bleeding time (closure gate, RD-2).'),
                                         Select::make('incident_source')
                                             ->options(['Internal' => 'Internal', 'External' => 'External'])
                                             ->required(),
@@ -168,6 +172,21 @@ class IncidentResource extends Resource
                                     DateTimePicker::make('discovered_at')->afterOrEqual('incident_date'),
                                     DateTimePicker::make('stop_bleeding_at')->afterOrEqual('incident_date'),
                                     DateTimePicker::make('entry_date_tech_risk')->required()->maxDate(now()),
+                                    Select::make('detected_via')
+                                        ->label('Detected Via')
+                                        ->options(DetectedVia::options())
+                                        ->helperText('Who caught it first — feeds the channel-mix KPI'),
+                                    Select::make('failed_control')
+                                        ->label('Failed Control')
+                                        ->options(FailedControl::options())
+                                        ->helperText('Prevention / Detection / Response — set at closure'),
+                                    Toggle::make('start_time_known')
+                                        ->label('Occurrence time is exact')
+                                        ->helperText('Leave off when only the date is known — 00:00/12:00 stays a placeholder instead of fake precision.'),
+                                    TextInput::make('detection_delay_days')
+                                        ->label('Started days before discovery')
+                                        ->numeric()->minValue(0)->maxValue(3650)
+                                        ->helperText('Estimated gap when the true start time is unknown (RD-4).'),
                                 ])->columns(['default' => 1, 'sm' => 2, 'lg' => 4]),
 
                             Section::make('Categories')
@@ -361,6 +380,8 @@ class IncidentResource extends Resource
                 })->color(fn (string $state): string => (floatval($state) >= 100) ? 'success' : ((floatval($state) > 0) ? 'warning' : 'gray'))->width('80px'),
 
                 TextColumn::make('classification')->sortable()->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('detected_via')->label('Detected Via')->badge()->color(fn (?DetectedVia $state): string => $state?->color() ?? 'gray')->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('failed_control')->label('Failed Control')->badge()->color(fn (?FailedControl $state): string => $state?->color() ?? 'gray')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('incident_type')->label('Area')->sortable()->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('business_category')->label('Business Category')->badge()->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('root_cause_category')->label('Root Cause Category')->badge()->toggleable(isToggledHiddenByDefault: true),
@@ -455,6 +476,14 @@ class IncidentResource extends Resource
                 SelectFilter::make('classification')
                     ->label('Classification')
                     ->options(IncidentClassification::options())
+                    ->multiple(),
+                SelectFilter::make('detected_via')
+                    ->label('Detected Via')
+                    ->options(DetectedVia::options())
+                    ->multiple(),
+                SelectFilter::make('failed_control')
+                    ->label('Failed Control')
+                    ->options(FailedControl::options())
                     ->multiple(),
 
                 \App\Filament\Filters\QuickPeriodFilter::make(),

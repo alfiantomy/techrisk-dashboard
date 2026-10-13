@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Observers;
 
+use App\Enums\IncidentStatus;
 use App\Enums\Severity;
 use App\Events\IncidentCreatedEvent;
 use App\Events\IncidentEscalatedEvent;
@@ -14,9 +15,40 @@ use App\Models\Incident;
 use App\Notifications\IncidentStatusChanged;
 use App\Notifications\IncidentUpdated;
 use Carbon\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class IncidentObserver
 {
+    /**
+     * Closure gate (PROJ-011 Wave 2, RD-2): a row cannot move INTO Completed
+     * without an RCA (root_cause or root_cause_category) and a stop-bleed
+     * time. One guard covers the edit form, update_status, API and imports.
+     * Deliberate exception to "observers never block" (documented in
+     * CLAUDE.md): without it, bad data silently persists — 28/66 Completed
+     * rows were missing RCA (findings.md 2026-10-13). Rows already
+     * Completed stay editable; only the transition is gated. 'N/A' in
+     * root_cause passes — a human can override deliberately.
+     */
+    public function saving(Incident $incident): void
+    {
+        $becomingCompleted = $incident->incident_status === IncidentStatus::Completed
+            && $incident->isDirty('incident_status');
+
+        if (! $becomingCompleted) {
+            return;
+        }
+
+        $hasRca = ! blank($incident->root_cause) || ! empty($incident->root_cause_category);
+
+        if (! $hasRca || $incident->stop_bleeding_at === null) {
+            throw ValidationException::withMessages([
+                'incident_status' => 'Cannot complete: '
+                    .($incident->stop_bleeding_at === null ? 'stop bleeding time' : 'root cause')
+                    .' is still missing. Fill it in before completing.',
+            ]);
+        }
+    }
+
     /**
      * Handle the Incident "created" event.
      */
@@ -105,10 +137,14 @@ class IncidentObserver
             $incident->isDirty('incident_type') || $incident->isDirty('fund_status') ||
             $incident->isDirty('recovered_fund') || $incident->isDirty('fund_loss') ||
             $incident->isDirty('potential_fund_loss') || $incident->isDirty('classification');
+        // Detection fields feed the governance KPI caches (keyed on
+        // dashboard_cache_version) — a change must bump it or they serve
+        // stale numbers until TTL (Edit-Safety rule 2).
+        $needsCacheBump = $incident->isDirty(['detected_via', 'failed_control', 'detection_delay_days', 'start_time_known']);
         $needsAutoLabel = $incident->isDirty('summary') || $incident->isDirty('root_cause');
 
         // Dispatch metrics calculation to queue if needed
-        if ($needsRecalculation || $needsCategoryRecalculation || $needsAutoLabel) {
+        if ($needsRecalculation || $needsCategoryRecalculation || $needsCacheBump || $needsAutoLabel) {
             // getOriginal() returns the EnumCast instance — the job wants the string value.
             $previousClassification = $incident->isDirty('classification')
                 ? $incident->getOriginal('classification')?->value

@@ -106,6 +106,10 @@ class Incident extends Model implements Auditable
         'retro_markdown',
         'retro_generated_at',
         'retro_model',
+        'detected_via',
+        'failed_control',
+        'detection_delay_days',
+        'start_time_known',
     ];
 
     protected $casts = [
@@ -118,6 +122,8 @@ class Incident extends Model implements Auditable
         'severity' => \App\Casts\EnumCast::class.':'.\App\Enums\Severity::class,
         'fund_status' => \App\Casts\EnumCast::class.':'.\App\Enums\FundStatus::class,
         'classification' => \App\Casts\EnumCast::class.':'.\App\Enums\IncidentClassification::class,
+        'detected_via' => \App\Casts\EnumCast::class.':'.\App\Enums\DetectedVia::class,
+        'failed_control' => \App\Casts\EnumCast::class.':'.\App\Enums\FailedControl::class,
         'stop_bleeding_at' => 'datetime',
         'discovered_at' => 'datetime',
         'incident_date' => 'datetime',
@@ -453,6 +459,33 @@ class Incident extends Model implements Auditable
     public function shouldCalculateMttrByDays(): bool
     {
         return in_array($this->fund_status?->value, ['Confirmed loss', 'Potential recovery', 'Fully recovered', 'Non Tech Loss']);
+    }
+
+    /**
+     * Whether the occurrence time is real — the explicit flag when set
+     * (PROJ-011 RD-4), else the incident time is not a 00:00/12:00
+     * placeholder.
+     */
+    public function startTimeKnown(): bool
+    {
+        return $this->start_time_known
+            ?? ! in_array($this->incident_date?->format('H:i:s'), ['00:00:00', '12:00:00'], true);
+    }
+
+    /**
+     * Detection lag in hours from real timestamps, falling back to the
+     * recorded "started X days before discovery" estimate. Null when
+     * neither exists — never a negative or placeholder-derived number.
+     */
+    public function effectiveDetectionLagHours(): ?float
+    {
+        if ($this->discovered_at && $this->startTimeKnown()) {
+            $hours = $this->incident_date->diffInMinutes($this->discovered_at) / 60;
+
+            return $hours >= 0 ? round($hours, 2) : null;
+        }
+
+        return $this->detection_delay_days !== null ? round($this->detection_delay_days * 24, 2) : null;
     }
 
     /**

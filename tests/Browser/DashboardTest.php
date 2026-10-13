@@ -183,7 +183,7 @@ class DashboardTest extends DuskTestCase
         for ($i = 0; $i < 5; $i++) {
             Incident::factory()->create([
                 'classification' => 'Issue',
-                'incident_status' => 'Completed',
+                'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
                 'incident_source' => 'Internal',
                 'incident_date' => now()->subMonths(rand(0, 5))->startOfWeek(),
             ]);

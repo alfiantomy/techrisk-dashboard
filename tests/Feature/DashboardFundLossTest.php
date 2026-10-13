@@ -20,7 +20,7 @@ class DashboardFundLossTest extends TestCase
             'severity' => 'P1',
             'classification' => 'Incident',
             'incident_date' => '2026-03-01 10:00:00',
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'fund_status' => 'Non fundLoss',
             'potential_fund_loss' => 500,
         ]);
@@ -44,7 +44,7 @@ class DashboardFundLossTest extends TestCase
             'severity' => 'P1',
             'classification' => 'Issue',
             'incident_date' => '2026-03-01 10:00:00',
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'fund_status' => 'Non fundLoss',
             'fund_loss' => 999,
         ]);
@@ -52,7 +52,7 @@ class DashboardFundLossTest extends TestCase
             'severity' => 'P1',
             'classification' => 'Incident',
             'incident_date' => '2026-03-11 10:00:00',
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
             'fund_status' => 'Non fundLoss',
             'fund_loss' => 500,
         ]);

@@ -298,7 +298,7 @@ class WebRouteTest extends TestCase
         Incident::factory()->create([
             'classification' => 'Incident',
             'incident_date' => '2026-01-15',
-            'incident_status' => 'Completed',
+            'incident_status' => 'Completed', 'root_cause' => 'Test RCA', 'stop_bleeding_at' => now(),
         ]);
 
         $response = $this->actingAs($user)->get('/admin/weekly-report/export/2026');
