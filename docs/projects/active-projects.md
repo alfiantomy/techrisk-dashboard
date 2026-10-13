@@ -369,6 +369,7 @@ Owner request 2026-10-13 ("cari nama" + "escalate ke atasnya seperti org tree"),
 - [x] Observer + command swap to users directory; escalation ladder cumulative — 2026-10-13
 - [x] Form suggestions + validation; UserResource can_login/manager fields + columns — 2026-10-13
 - [x] 6 tests (UserDirectoryEscalationTest) — 2026-10-13; baseline 823/2767
+- [x] Iteration 2 (owner 2026-10-13): pic_email TagsInput → incident-picker-style Select dropdown (options keyed by email over human users, stored `pic_email` unchanged) + built-in "+" createOption button → inline new contact via `upsertFromPicEmails` (login-disabled); +1 test → 824/2777
 - [ ] Owner runs `php artisan migrate --force` on prod (same run covers 000001–000003), then curates manager chains in User Management (empty chain = no escalation)
 
 ---

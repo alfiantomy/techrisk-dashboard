@@ -37,26 +37,28 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->columnSpanFull(),
                 Forms\Components\DatePicker::make('due_date')
                     ->required(),
-                Forms\Components\TagsInput::make('pic_email')
+                Forms\Components\Select::make('pic_email')
+                    ->label('Person In Charge')
                     ->required()
-                    ->suggestions(fn () => User::humanUsers()
-                        ->orderBy('name')
-                        ->limit(100)
-                        ->get()
-                        ->map(fn ($u) => "{$u->name} <{$u->email}>")
-                        ->all())
-                    ->helperText('Pick a suggestion to search by name — new emails are saved to the directory automatically.')
-                    ->rules([
-                        // Accepts bare emails or "Name <email>" suggestion
-                        // tags — normalized to bare emails by the observer.
-                        fn () => function (string $attribute, array $value, \Closure $fail) {
-                            foreach ($value as $tag) {
-                                if (! User::parsePicEmailTag((string) $tag)) {
-                                    $fail("{$tag} is not a valid email (or \"Name <email>\") tag.");
-                                }
-                            }
-                        },
-                    ]),
+                    ->multiple()
+                    ->searchable()
+                    ->preload()
+                    // Keyed by email — pic_email keeps storing bare emails.
+                    ->options(fn () => User::humanUsers()->orderBy('name')->get()
+                        ->mapWithKeys(fn ($u) => [$u->email => $u->name]))
+                    ->createOptionModalHeading('Add new PIC contact')
+                    ->createOptionForm([
+                        Forms\Components\TextInput::make('name'),
+                        Forms\Components\TextInput::make('email')->email()->required(),
+                    ])
+                    // Directory contact, login-disabled (single home:
+                    // User::upsertFromPicEmails — flip can_login to grant access).
+                    ->createOptionUsing(function (array $data): string {
+                        $tag = filled($data['name'] ?? null) ? "{$data['name']} <{$data['email']}>" : $data['email'];
+
+                        return User::upsertFromPicEmails([$tag])[0];
+                    })
+                    ->helperText('Search by name — or use + to add a new contact (no login access until enabled in User Management).'),
                 Forms\Components\Toggle::make('reminder'),
                 Forms\Components\Select::make('reminder_frequency')
                     ->options([

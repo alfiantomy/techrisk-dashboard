@@ -2,14 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\IncidentResource\Pages\EditIncident;
+use App\Filament\Resources\IncidentResource\RelationManagers\ActionImprovementsRelationManager;
 use App\Mail\GroupNotificationMail;
 use App\Models\ActionImprovement;
 use App\Models\Incident;
 use App\Models\User;
+use Filament\Forms\Form;
 use Filament\Panel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Livewire\Livewire;
+use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 /**
@@ -182,5 +187,42 @@ class UserDirectoryEscalationTest extends TestCase
 
         $this->assertSame(0, $action->refresh()->escalation_level);
         $this->assertNull($action->last_escalated_at);
+    }
+
+    /**
+     * PIC picker is the incident-style dropdown (owner request 2026-10-13):
+     * options keyed by email over human users (directory contacts included)
+     * + the built-in "+" createOption action. Driving the real Create table
+     * action proves the email-keyed multiple Select round-trips bare emails.
+     */
+    public function test_pic_picker_dropdown_lists_directory_contacts_with_plus_create(): void
+    {
+        User::upsertFromPicEmails(['Budi Santoso <budi@dana.id>']);
+        $regular = User::factory()->create(['name' => 'Regular Person']);
+        $incident = Incident::factory()->create();
+
+        Permission::firstOrCreate(['name' => 'manage incidents']);
+        $this->actingAs(User::factory()->create()->givePermissionTo('manage incidents'));
+
+        Livewire::test(ActionImprovementsRelationManager::class, [
+            'ownerRecord' => $incident,
+            'pageClass' => EditIncident::class,
+        ])
+            ->assertSuccessful()
+            ->callTableAction('create', data: [
+                'title' => 'Fix the thing',
+                'detail' => 'Do it properly',
+                'due_date' => now()->addWeeks(2)->toDateString(),
+                'pic_email' => ['budi@dana.id', $regular->email],
+            ]);
+
+        $action = ActionImprovement::query()->latest('id')->first();
+        $this->assertSame(['budi@dana.id', $regular->email], $action->pic_email, 'dropdown-picked emails store as bare emails');
+
+        // The "+" createOption path is the single-home upsert under a thin
+        // tag-building shell — same input shape it already covers.
+        $created = User::upsertFromPicEmails(['Fresh Contact <fresh@dana.id>']);
+        $this->assertSame(['fresh@dana.id'], $created);
+        $this->assertFalse(User::where('email', 'fresh@dana.id')->value('can_login'));
     }
 }
