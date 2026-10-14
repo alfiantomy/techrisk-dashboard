@@ -18,7 +18,7 @@ class StoreActionImprovementRequest extends ApiFormRequest
         return [
             'title' => ['required', 'string', 'max:255'],
             'detail' => ['required', 'string'],
-            'due_date' => ['required', 'date'],
+            'due_date' => ['nullable', 'date'],
             'pic_email' => ['required', 'array'],
             'reminder' => ['boolean'],
             'reminder_frequency' => ['nullable', 'string'],

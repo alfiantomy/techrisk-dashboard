@@ -192,11 +192,12 @@ class DocumentActionItemService
     }
 
     /**
-     * Strict Y-m-d + real calendar date, else the +30d default. Carbon is
+     * Strict Y-m-d + real calendar date, else null = TBD (owner 2026-10-14 —
+     * unknown dates stay TBD, no invented +30d default). Carbon is
      * deliberately avoided: createFromFormat silently rolls 2026-02-31 and
      * Carbon::parse accepts loose formats like 12/31/2026.
      */
-    private function resolveDueDate(mixed $value): string
+    private function resolveDueDate(mixed $value): ?string
     {
         $value = is_string($value) ? trim($value) : '';
 
@@ -205,7 +206,7 @@ class DocumentActionItemService
             return $value;
         }
 
-        return now()->addDays(30)->toDateString();
+        return null;
     }
 
     private function cleanCandidate(string $line): ?string

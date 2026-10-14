@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Services\WarRoom;
 
 use App\Events\WarRoomAgentStreaming;
@@ -1238,7 +1239,8 @@ class WarRoomService
                 'incident_id' => $session->incident_id,
                 'title' => Str::limit(trim($item), 250),
                 'detail' => trim($item)."\n\n_{$note}_",
-                'due_date' => now()->addDays(30)->toDateString(),
+                // TBD (owner 2026-10-14) — the retro knows the action, not the deadline.
+                'due_date' => null,
                 'pic_email' => [],
                 'reminder' => false,
                 'status' => 'draft',

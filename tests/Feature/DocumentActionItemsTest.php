@@ -147,7 +147,8 @@ MD;
         $this->assertSame(['Separate DB into 3 Instances ( Repayment , Payment , Member )', 'Load Test ( tambahin hasilnya nanti )'], $drafts->pluck('title')->all());
         $this->assertSame('low', $drafts[0]->priority);
         $this->assertSame([], $drafts[0]->pic_email);
-        $this->assertSame(now()->addDays(30)->toDateString(), $drafts[0]->due_date->toDateString());
+        // Parser items carry no dates → TBD, never an invented +30d (owner 2026-10-14).
+        $this->assertNull($drafts[0]->due_date);
         $this->assertStringContainsString('rca-dana-cicil.pdf', (string) $drafts[0]->detail);
     }
 
@@ -245,7 +246,7 @@ MD;
         $this->assertStringContainsString('Drafted by AI from RCA document: rca-dana-cicil.pdf', (string) $draft->detail);
     }
 
-    public function test_row_action_ai_extractor_invalid_due_date_falls_back_to_plus_30_days(): void
+    public function test_row_action_ai_extractor_invalid_due_date_becomes_tbd(): void
     {
         $this->actingAs($this->manager());
         $incident = $this->incident();
@@ -266,7 +267,7 @@ MD;
             ->assertNotified('1 draft action item(s) added');
 
         $draft = ActionImprovement::where('incident_id', $incident->id)->first();
-        $this->assertSame(now()->addDays(30)->toDateString(), $draft->due_date->toDateString());
+        $this->assertNull($draft->due_date);
         $this->assertSame('low', $draft->priority);
         $this->assertSame([], $draft->pic_email);
     }

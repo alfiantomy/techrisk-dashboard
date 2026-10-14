@@ -348,6 +348,8 @@ class ActionImprovementLifecycleTest extends TestCase
         $this->assertSame('critical', $drafts[0]->priority, 'AI priority kept when valid');
         $this->assertSame('low', $drafts[1]->priority, 'invalid priority falls back to low');
         $this->assertSame($incident->id, $drafts[0]->incident_id);
+        // No date in the AI output → TBD, no invented +30d (owner 2026-10-14).
+        $this->assertNull($drafts[0]->due_date);
 
         // Re-running proposes the same set → 0 new rows (title dedupe).
         $this->assertSame(0, $service->generate($incident));

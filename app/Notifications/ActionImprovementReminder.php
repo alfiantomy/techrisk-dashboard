@@ -20,16 +20,29 @@ class ActionImprovementReminder extends ActionImprovementNotification
         return 'action.improvement.reminder';
     }
 
+    /**
+     * TBD rows (null due date) return null — diffInDays(null) would parse
+     * null as now() and report "0 days remaining".
+     */
+    private function daysUntilDue(): ?int
+    {
+        return $this->actionImprovement->due_date === null
+            ? null
+            : (int) round(now()->diffInDays($this->actionImprovement->due_date, false));
+    }
+
     public function toMail(object $notifiable): MailMessage
     {
-        $daysUntilDue = now()->diffInDays($this->actionImprovement->due_date, false);
-        $isOverdue = $daysUntilDue < 0;
+        $daysUntilDue = $this->daysUntilDue();
+        $isOverdue = $daysUntilDue !== null && $daysUntilDue < 0;
 
         $extraLines = [
             '**Status:** '.ucfirst($this->actionImprovement->status),
         ];
 
-        if ($isOverdue) {
+        if ($daysUntilDue === null) {
+            $extraLines[] = '**Due date not set (TBD)**';
+        } elseif ($isOverdue) {
             $extraLines[] = '**'.abs($daysUntilDue).' days overdue**';
         } else {
             $extraLines[] = '**'.$daysUntilDue.' days remaining**';
@@ -47,15 +60,18 @@ class ActionImprovementReminder extends ActionImprovementNotification
 
     public function toDatabase(object $notifiable): array
     {
-        $daysUntilDue = now()->diffInDays($this->actionImprovement->due_date, false);
-        $isOverdue = $daysUntilDue < 0;
+        $daysUntilDue = $this->daysUntilDue();
+        $isOverdue = $daysUntilDue !== null && $daysUntilDue < 0;
 
         return $this->baseDatabasePayload([
             'title' => $isOverdue ? 'Action Improvement Overdue' : 'Action Improvement Reminder',
             'body' => '"'.$this->actionImprovement->title.'" is '.
-                ($isOverdue
-                    ? abs($daysUntilDue).' days overdue'
-                    : 'due in '.$daysUntilDue.' days'
+                ($daysUntilDue === null
+                    ? 'due TBD (no date set)'
+                    : ($isOverdue
+                        ? abs($daysUntilDue).' days overdue'
+                        : 'due in '.$daysUntilDue.' days'
+                    )
                 ),
             'days_until_due' => $daysUntilDue,
             'is_overdue' => $isOverdue,

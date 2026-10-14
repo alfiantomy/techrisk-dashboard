@@ -28,6 +28,13 @@ class ActionImprovementsRelationManager extends RelationManager
             && $record->due_date->isBefore(today());
     }
 
+    /** Pending without a due date — tracked visually, never reminded (owner 2026-10-14). */
+    private function isTbd($record): bool
+    {
+        return $record->status === ActionImprovement::STATUS_PENDING
+            && $record->due_date === null;
+    }
+
     public function form(Form $form): Form
     {
         return $form->schema(ActionImprovementFormSchema::schema());
@@ -46,10 +53,13 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->toggleable(),
                 Tables\Columns\TextColumn::make('due_date')
                     ->date()
+                    ->placeholder('TBD')
                     ->sortable()
                     // RD-3: overdue pending rows are visible in-UI, not just
-                    // in the opt-in reminder emails.
-                    ->color(fn ($record): string => $this->isOverdue($record) ? 'danger' : 'default')
+                    // in the opt-in reminder emails. Pending TBD rows get the
+                    // warning color so they read as tracked, not forgotten.
+                    ->color(fn ($record): string => $this->isOverdue($record) ? 'danger'
+                        : ($this->isTbd($record) ? 'warning' : 'default'))
                     ->weight(fn ($record): string => $this->isOverdue($record) ? 'bold' : 'normal')
                     ->description(fn ($record): ?string => $this->isOverdue($record) ? 'overdue' : null),
                 Tables\Columns\TextColumn::make('pic_email'),
@@ -90,7 +100,16 @@ class ActionImprovementsRelationManager extends RelationManager
                         fn ($query) => $query
                             ->where(fn ($q) => $q
                                 ->where('status', '!=', ActionImprovement::STATUS_PENDING)
-                                ->orWhereDate('due_date', '>=', today())),
+                                ->orWhereDate('due_date', '>=', today())
+                                ->orWhereNull('due_date')), // TBD can't be past due
+                    ),
+                // Owner 2026-10-14: TBD rows are trackable — nothing else ever
+                // surfaces them (reminders/overdue pass them by).
+                TernaryFilter::make('tbd')
+                    ->label('TBD (no due date)')
+                    ->queries(
+                        fn ($query) => $query->whereNull('due_date'),
+                        fn ($query) => $query->whereNotNull('due_date'),
                     ),
             ])
             ->headerActions([

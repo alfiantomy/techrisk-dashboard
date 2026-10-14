@@ -8,7 +8,7 @@ An action improvement has been assigned to you.
 **Details:**
 {{ $actionImprovement->detail }}
 
-**Due Date:** {{ $actionImprovement->due_date }}
+**Due Date:** {{ $actionImprovement->due_date?->format('Y-m-d') ?? 'TBD' }}
 
 <x-mail::button :url="route('filament.admin.resources.incidents.edit', $actionImprovement->incident)">
 View Incident

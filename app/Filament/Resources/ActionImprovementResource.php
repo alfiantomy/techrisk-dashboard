@@ -42,7 +42,10 @@ class ActionImprovementResource extends Resource
         return parent::getEloquentQuery()
             ->with(['incident', 'completedBy'])
             // Year access on the incident half — same scope as IssueResource.
-            ->whereHas('incident', fn (Builder $query) => $query->applyUserYearAccess(auth()->user()));
+            ->whereHas('incident', fn (Builder $query) => $query->applyUserYearAccess(auth()->user()))
+            // TBD rows sort last under the default due_date sort (NULLs
+            // otherwise lead on MySQL/SQLite ASC) — urgent dates stay on top.
+            ->orderByRaw('due_date IS NULL');
     }
 
     public static function form(Form $form): Form
@@ -117,9 +120,13 @@ class ActionImprovementResource extends Resource
                     ->sortable(),
                 TextColumn::make('due_date')
                     ->date()
+                    ->placeholder('TBD')
                     ->sortable()
+                    // Overdue = danger; pending TBD = warning (tracked, not
+                    // forgotten — nothing else ever surfaces them).
                     ->color(fn ($record): string => $record->status === ActionImprovement::STATUS_PENDING
-                        && $record->due_date?->isBefore(today()) ? 'danger' : 'default')
+                        && $record->due_date?->isBefore(today()) ? 'danger'
+                        : ($record->status === ActionImprovement::STATUS_PENDING && $record->due_date === null ? 'warning' : 'default'))
                     ->weight(fn ($record): string => $record->status === ActionImprovement::STATUS_PENDING
                         && $record->due_date?->isBefore(today()) ? 'bold' : 'normal')
                     ->description(fn ($record): ?string => $record->status === ActionImprovement::STATUS_PENDING
@@ -179,7 +186,16 @@ class ActionImprovementResource extends Resource
                         fn ($query) => $query
                             ->where(fn ($q) => $q
                                 ->where('status', '!=', ActionImprovement::STATUS_PENDING)
-                                ->orWhereDate('due_date', '>=', today())),
+                                ->orWhereDate('due_date', '>=', today())
+                                ->orWhereNull('due_date')), // TBD can't be past due
+                    ),
+                // Owner 2026-10-14: TBD rows are trackable — nothing else ever
+                // surfaces them (reminders/overdue pass them by).
+                TernaryFilter::make('tbd')
+                    ->label('TBD (no due date)')
+                    ->queries(
+                        fn ($query) => $query->whereNull('due_date'),
+                        fn ($query) => $query->whereNotNull('due_date'),
                     ),
             ])
             ->actions([

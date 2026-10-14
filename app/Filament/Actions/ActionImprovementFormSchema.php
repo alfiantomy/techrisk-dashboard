@@ -33,7 +33,8 @@ class ActionImprovementFormSchema
                 ->required()
                 ->columnSpanFull(),
             Forms\Components\DatePicker::make('due_date')
-                ->required(),
+                // Empty = TBD (owner 2026-10-14) — nullable column, shows TBD in tables.
+                ->helperText('Leave empty when the due date is not decided yet — the row shows TBD.'),
             Forms\Components\Select::make('pic_email')
                 ->label('Person In Charge')
                 ->required()

@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Notifications;
 
 use App\Filament\Resources\IncidentResource;
@@ -41,7 +42,7 @@ abstract class ActionImprovementNotification extends BaseNotification
             '**Incident:** '.$incident->title,
             '**Action:** '.$this->actionImprovement->title,
             '**Detail:** '.$this->actionImprovement->detail,
-            '**Due Date:** '.$this->dueDateString() ?? 'No due date',
+            '**Due Date:** '.($this->dueDateString() ?? 'TBD'),
         ], $extraLines);
 
         return $this->buildMailMessage($subject, $lines, $this->incidentUrl(), 'View Incident', $notifiable)

@@ -70,11 +70,13 @@ class ActionImprovementsOverview extends BaseWidget
             $aging = $scoped()
                 ->selectRaw("
                     COUNT(CASE WHEN status = 'pending' AND due_date < ? THEN 1 END) as overdue,
-                    COUNT(CASE WHEN status = 'pending' AND due_date < ? AND escalation_level > 0 THEN 1 END) as escalated
+                    COUNT(CASE WHEN status = 'pending' AND due_date < ? AND escalation_level > 0 THEN 1 END) as escalated,
+                    COUNT(CASE WHEN status = 'pending' AND due_date IS NULL THEN 1 END) as tbd
                 ", [today()->toDateString(), today()->toDateString()])
                 ->first();
             $overdueCount = (int) ($aging->overdue ?? 0);
             $escalatedCount = (int) ($aging->escalated ?? 0);
+            $tbdCount = (int) ($aging->tbd ?? 0);
 
             // Avg days-to-close over done rows (created_at → completed_at);
             // '-' until closeout data exists (pre-PROJ-14 done rows have none).
@@ -89,7 +91,10 @@ class ActionImprovementsOverview extends BaseWidget
 
             return [
                 Stat::make('Pending Action Improvements', $pendingCount)
-                    ->description('Pending actions '.$descriptionPeriod)
+                    // TBD riders on the pending card (owner 2026-10-14): rows
+                    // with no due date never fire reminders — the count is the
+                    // only thing that surfaces them ("escalated" precedent).
+                    ->description('Pending actions '.$descriptionPeriod.($tbdCount > 0 ? " · {$tbdCount} TBD (no due date)" : ''))
                     ->descriptionIcon('heroicon-m-exclamation-triangle')
                     ->chart([$doneCount, $pendingCount, max(0, $pendingCount - 1), $pendingCount + 1, $pendingCount])
                     ->color('warning'),

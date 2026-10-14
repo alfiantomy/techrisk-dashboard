@@ -18,7 +18,7 @@ class UpdateActionImprovementRequest extends ApiFormRequest
         return [
             'title' => ['string', 'max:255'],
             'detail' => ['string'],
-            'due_date' => ['date'],
+            'due_date' => ['nullable', 'date'],
             'pic_email' => ['array'],
             'reminder' => ['boolean'],
             'reminder_frequency' => ['nullable', 'string'],
