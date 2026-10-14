@@ -45,6 +45,23 @@
 
 ## Active Projects
 
+### [PROJ-016] Add Action Items button on RCA documents
+
+**Status:** Done
+**Priority:** P2
+**Start Date:** 2026-10-14
+
+#### Description
+Owner request 2026-10-14: a button on each uploaded RCA document (Supporting Documents tab) that quick-adds the document's action items to the incident's Action Improvements, "can later be edited one by one". Owner explicitly rejected AI extraction ("do we need AI? if already have MD?") — the RCA template always carries an `## ACTION IMPROVEMENT` section, so the parse is **deterministic over the converted markdown**: synchronous row action, no job, no notification, zero tokens. `DocumentActionItemService::extractFromMarkdown()` survives the heavily mangled PDF→MD output (inline ``` fences, mid-line `## DONE`, owner names on their own lines — the owner's Dana Cicil RCA is the test fixture); items become **draft** rows (due +30d, PIC empty, priority low, provenance note naming the file), deduped case-insensitively incident-wide (re-click = 0 new). Draft creation lives in `DocumentActionItemService::createDrafts()`, extracted from `Ai\ActionSuggestionService` — one loop, two consumers (AI + document paths cannot drift). Deliberate simplification: owners/due dates in the section are NOT parsed (too mangled to trust); everything editable per row. Button visible only when conversion completed + `manage incidents`; toasts: N added / Nothing new / No section found.
+
+#### Tasks
+- [x] `DocumentActionItemService` (parser + shared `createDrafts`) — 2026-10-14
+- [x] `ActionSuggestionService::generate()` refactored onto the shared loop (behavior-preserving; PROJ-014 tests unchanged) — 2026-10-14
+- [x] `add_action_items` row action on `InvestigationDocumentsRelationManager` — 2026-10-14
+- [x] 7 tests (`DocumentActionItemsTest`); pint; full suite 847/2,875 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
+- [x] Docs (CLAUDE.md dependency-map rows + baseline; this entry) — 2026-10-14
+- [ ] Owner live check: incident → Supporting Documents → completed RCA → "Add Action Items" → drafts appear in the Action Improvements tab with the provenance note; re-click → "Nothing new to add"
+
 ### [PROJ-001] Initial SOP and Documentation Setup
 
 **Status:** Done

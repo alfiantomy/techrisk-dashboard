@@ -327,6 +327,63 @@ class InvestigationDocumentsRelationManager extends RelationManager
 
                         $livewire->js('setTimeout(() => $wire.$refresh(), 200)');
                     }),
+                // PROJ-016: deterministic quick-add — parse this document's
+                // ACTION IMPROVEMENT section (converted markdown, no AI) into
+                // draft Action Improvements on the incident.
+                Tables\Actions\Action::make('add_action_items')
+                    ->icon('heroicon-o-clipboard-document-check')
+                    ->label('Add Action Items')
+                    ->color('primary')
+                    ->requiresConfirmation()
+                    ->modalHeading('Add Action Items from RCA')
+                    ->modalDescription(fn ($record) => 'Parse the ACTION IMPROVEMENT section of "'.$record->original_filename.'" and add its items as draft Action Improvements on this incident. Existing titles are skipped.')
+                    ->visible(fn ($record): bool => $record->markdown_conversion_status === 'completed'
+                        && $record->markdown_path !== null
+                        && (bool) auth()->user()?->can('manage incidents'))
+                    ->action(function ($record) {
+                        $markdown = $record->getMarkdownContent();
+
+                        if (blank($markdown)) {
+                            Notification::make()
+                                ->title('No markdown')
+                                ->body('No converted markdown available for this document.')
+                                ->warning()
+                                ->send();
+
+                            return;
+                        }
+
+                        $service = app(\App\Services\ActionImprovements\DocumentActionItemService::class);
+                        $titles = $service->extractFromMarkdown($markdown);
+
+                        if ($titles === []) {
+                            Notification::make()
+                                ->title('No action items found')
+                                ->body('No ACTION IMPROVEMENT section (or no usable items) in the converted markdown.')
+                                ->warning()
+                                ->send();
+
+                            return;
+                        }
+
+                        $created = $service->createDrafts(
+                            $this->getOwnerRecord(),
+                            array_map(fn (string $title): array => ['title' => $title], $titles),
+                            '_Drafted from RCA document: '.$record->original_filename.' — review and promote._',
+                        );
+
+                        $created > 0
+                            ? Notification::make()
+                                ->title($created.' draft action item(s) added')
+                                ->body('Review and promote them in the Action Improvements tab.')
+                                ->success()
+                                ->send()
+                            : Notification::make()
+                                ->title('Nothing new to add')
+                                ->body(count($titles).' item(s) found — all already exist on this incident.')
+                                ->info()
+                                ->send();
+                    }),
                 Tables\Actions\Action::make('download')
                     ->icon('heroicon-o-arrow-down-tray')
                     ->label('Download')

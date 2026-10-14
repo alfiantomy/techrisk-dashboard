@@ -322,7 +322,7 @@ class ActionImprovementLifecycleTest extends TestCase
             $mock->shouldReceive('callAiForJson')->andReturn($aiResult);
         });
 
-        return new ActionSuggestionService($ai, app(IncidentMarkdownExporter::class));
+        return new ActionSuggestionService($ai, app(IncidentMarkdownExporter::class), app(\App\Services\ActionImprovements\DocumentActionItemService::class));
     }
 
     public function test_suggest_actions_creates_deduped_drafts(): void
