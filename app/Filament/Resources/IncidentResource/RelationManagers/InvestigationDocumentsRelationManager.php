@@ -327,20 +327,42 @@ class InvestigationDocumentsRelationManager extends RelationManager
 
                         $livewire->js('setTimeout(() => $wire.$refresh(), 200)');
                     }),
-                // PROJ-016: deterministic quick-add — parse this document's
-                // ACTION IMPROVEMENT section (converted markdown, no AI) into
-                // draft Action Improvements on the incident.
+                // PROJ-016: quick-add — parse this document's ACTION
+                // IMPROVEMENT section into draft Action Improvements on the
+                // incident. Iteration 2: an AI model can be chosen as the
+                // extractor instead of the deterministic fast parse (the
+                // regex trim mangled some items) — the model reads the whole
+                // document and maps title/detail/priority/due date/owners.
                 Tables\Actions\Action::make('add_action_items')
                     ->icon('heroicon-o-clipboard-document-check')
                     ->label('Add Action Items')
                     ->color('primary')
                     ->requiresConfirmation()
                     ->modalHeading('Add Action Items from RCA')
-                    ->modalDescription(fn ($record) => 'Parse the ACTION IMPROVEMENT section of "'.$record->original_filename.'" and add its items as draft Action Improvements on this incident. Existing titles are skipped.')
+                    ->modalDescription(fn ($record) => 'Add the action improvement items of "'.$record->original_filename.'" as drafts on this incident. An AI model reads the document and maps the register columns (matched owners are auto-assigned); Fast parse is the deterministic regex. Existing titles are skipped.')
+                    ->form(function () use ($aiService, $models, $defaultModel) {
+                        // Gated on availability, not on $models — the picker
+                        // list comes from config even when no gateway is
+                        // configured (tests), which would silently flip the
+                        // default onto a failing AI path.
+                        $formModels = $aiService->isAvailable() ? $models : [];
+
+                        if ($formModels === []) {
+                            return []; // no AI configured — fast-parse only
+                        }
+
+                        return [
+                            \Filament\Forms\Components\Select::make('extractor')
+                                ->label('Extractor')
+                                ->options(['parser' => 'Fast parse (no AI)'] + $formModels)
+                                ->default(isset($formModels[$defaultModel]) ? $defaultModel : 'parser')
+                                ->required(),
+                        ];
+                    })
                     ->visible(fn ($record): bool => $record->markdown_conversion_status === 'completed'
                         && $record->markdown_path !== null
                         && (bool) auth()->user()?->can('manage incidents'))
-                    ->action(function ($record) {
+                    ->action(function ($record, array $data) {
                         $markdown = $record->getMarkdownContent();
 
                         if (blank($markdown)) {
@@ -354,23 +376,32 @@ class InvestigationDocumentsRelationManager extends RelationManager
                         }
 
                         $service = app(\App\Services\ActionImprovements\DocumentActionItemService::class);
-                        $titles = $service->extractFromMarkdown($markdown);
+                        $extractor = $data['extractor'] ?? 'parser';
 
-                        if ($titles === []) {
+                        if ($extractor === 'parser') {
+                            $items = array_map(
+                                fn (string $title): array => ['title' => $title],
+                                $service->extractFromMarkdown($markdown),
+                            );
+                            $provenance = '_Drafted from RCA document: '.$record->original_filename.' — review and promote._';
+                            $emptyBody = 'No ACTION IMPROVEMENT section (or no usable items) in the converted markdown.';
+                        } else {
+                            $items = $service->extractWithAi($markdown, $extractor);
+                            $provenance = '_Drafted by AI from RCA document: '.$record->original_filename.' — review and promote._';
+                            $emptyBody = 'The model returned no items — it may have found none or failed. Try another model or Fast parse.';
+                        }
+
+                        if ($items === []) {
                             Notification::make()
                                 ->title('No action items found')
-                                ->body('No ACTION IMPROVEMENT section (or no usable items) in the converted markdown.')
+                                ->body($emptyBody)
                                 ->warning()
                                 ->send();
 
                             return;
                         }
 
-                        $created = $service->createDrafts(
-                            $this->getOwnerRecord(),
-                            array_map(fn (string $title): array => ['title' => $title], $titles),
-                            '_Drafted from RCA document: '.$record->original_filename.' — review and promote._',
-                        );
+                        $created = $service->createDrafts($this->getOwnerRecord(), $items, $provenance);
 
                         $created > 0
                             ? Notification::make()
@@ -380,7 +411,7 @@ class InvestigationDocumentsRelationManager extends RelationManager
                                 ->send()
                             : Notification::make()
                                 ->title('Nothing new to add')
-                                ->body(count($titles).' item(s) found — all already exist on this incident.')
+                                ->body(count($items).' item(s) found — all already exist on this incident.')
                                 ->info()
                                 ->send();
                     }),

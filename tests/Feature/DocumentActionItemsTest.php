@@ -9,9 +9,11 @@ use App\Models\Incident;
 use App\Models\InvestigationDocument;
 use App\Models\User;
 use App\Services\ActionImprovements\DocumentActionItemService;
+use App\Services\Ai\AiTextService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Mockery\MockInterface;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
@@ -77,7 +79,7 @@ MD;
 
     public function test_extracts_items_from_mangled_rca_markdown(): void
     {
-        $titles = (new DocumentActionItemService)->extractFromMarkdown(self::OWNER_SECTION);
+        $titles = app(DocumentActionItemService::class)->extractFromMarkdown(self::OWNER_SECTION);
 
         $this->assertSame([
             'Separate DB into 3 Instances ( Repayment , Payment , Member )',
@@ -102,7 +104,7 @@ Steven
 Signed off by VP
 MD;
 
-        $titles = (new DocumentActionItemService)->extractFromMarkdown($markdown);
+        $titles = app(DocumentActionItemService::class)->extractFromMarkdown($markdown);
 
         // Prose mention ignored; "### Sub Note" neither terminates the
         // section nor becomes an item (its owner-name line filters out by
@@ -115,7 +117,7 @@ MD;
 
     public function test_empty_section_variants_return_no_titles(): void
     {
-        $service = new DocumentActionItemService;
+        $service = app(DocumentActionItemService::class);
 
         $this->assertSame([], $service->extractFromMarkdown("## Root Cause\nNo section at all."));
         $this->assertSame([], $service->extractFromMarkdown("## ACTION IMPROVEMENT\nN/A\nNone\n—"));
@@ -192,5 +194,111 @@ MD;
             'ownerRecord' => $incident,
             'pageClass' => EditIncident::class,
         ])->assertTableActionHidden('add_action_items', $doc);
+    }
+
+    // ---- AI extractor (iteration 2) ----
+
+    /**
+     * table() resolves isAvailable/getModelsForPicker on the same mocked
+     * instance — stub them or the Select collapses back to parser-only.
+     */
+    private function aiMock(array $actions, string $model = 'test-model'): void
+    {
+        $this->mock(AiTextService::class, function (MockInterface $mock) use ($actions, $model) {
+            $mock->shouldReceive('isAvailable')->andReturn(true);
+            $mock->shouldReceive('getModelsForPicker')->andReturn([$model => 'Test Model']);
+            $mock->shouldReceive('callAiForJson')
+                ->withArgs(fn (string $fieldType, string $m): bool => $fieldType === 'document_action_items' && $m === $model)
+                ->andReturn(['actions' => $actions]);
+        });
+    }
+
+    public function test_row_action_ai_extractor_creates_drafts_with_model_and_due_date(): void
+    {
+        config(['broadcasting.default' => 'log']); // matched owner fires the assigned notification
+        $this->actingAs($this->manager());
+        $steven = User::factory()->create(['name' => 'Steven Tan']);
+        $incident = $this->incident();
+        $doc = $this->completedDoc($incident, self::OWNER_SECTION);
+        $this->aiMock([[
+            'title' => 'Separate DB into 3 instances',
+            'detail' => 'Split the Loan DB. Owner: Steven Tan (DEV); Mystery Person to coordinate.',
+            'priority' => 'critical',
+            'due_date' => '2026-11-30',
+            'owners' => ['Steven Tan (DEV)', 'Mystery Person'],
+        ]]);
+
+        Livewire::test(InvestigationDocumentsRelationManager::class, [
+            'ownerRecord' => $incident,
+            'pageClass' => EditIncident::class,
+        ])
+            ->callTableAction('add_action_items', $doc, ['extractor' => 'test-model'])
+            ->assertNotified('1 draft action item(s) added');
+
+        $draft = ActionImprovement::where('incident_id', $incident->id)->first();
+        $this->assertSame('Separate DB into 3 instances', $draft->title);
+        $this->assertSame('critical', $draft->priority);
+        $this->assertSame('2026-11-30', $draft->due_date->toDateString());
+        // Matched owner auto-assigned by exact name; unmatched stays in detail.
+        $this->assertSame([$steven->email], $draft->pic_email);
+        $this->assertStringContainsString('Mystery Person', (string) $draft->detail);
+        $this->assertStringContainsString('Drafted by AI from RCA document: rca-dana-cicil.pdf', (string) $draft->detail);
+    }
+
+    public function test_row_action_ai_extractor_invalid_due_date_falls_back_to_plus_30_days(): void
+    {
+        $this->actingAs($this->manager());
+        $incident = $this->incident();
+        $doc = $this->completedDoc($incident, self::OWNER_SECTION);
+        $this->aiMock([[
+            'title' => 'Load test the upgrade path',
+            'detail' => 'Run a full load test.',
+            'priority' => 'bogus',
+            'due_date' => '31-12-2026',
+            'owners' => [],
+        ]]);
+
+        Livewire::test(InvestigationDocumentsRelationManager::class, [
+            'ownerRecord' => $incident,
+            'pageClass' => EditIncident::class,
+        ])
+            ->callTableAction('add_action_items', $doc, ['extractor' => 'test-model'])
+            ->assertNotified('1 draft action item(s) added');
+
+        $draft = ActionImprovement::where('incident_id', $incident->id)->first();
+        $this->assertSame(now()->addDays(30)->toDateString(), $draft->due_date->toDateString());
+        $this->assertSame('low', $draft->priority);
+        $this->assertSame([], $draft->pic_email);
+    }
+
+    public function test_row_action_ai_extractor_empty_result_warns_and_creates_nothing(): void
+    {
+        $this->actingAs($this->manager());
+        $incident = $this->incident();
+        $doc = $this->completedDoc($incident, self::OWNER_SECTION);
+        $this->aiMock([]);
+
+        Livewire::test(InvestigationDocumentsRelationManager::class, [
+            'ownerRecord' => $incident,
+            'pageClass' => EditIncident::class,
+        ])
+            ->callTableAction('add_action_items', $doc, ['extractor' => 'test-model'])
+            ->assertNotified('No action items found');
+
+        $this->assertSame(0, ActionImprovement::where('incident_id', $incident->id)->count());
+    }
+
+    public function test_row_action_parser_extractor_still_creates_drafts(): void
+    {
+        $this->actingAs($this->manager());
+        $incident = $this->incident();
+        $doc = $this->completedDoc($incident, self::OWNER_SECTION);
+
+        Livewire::test(InvestigationDocumentsRelationManager::class, [
+            'ownerRecord' => $incident,
+            'pageClass' => EditIncident::class,
+        ])
+            ->callTableAction('add_action_items', $doc, ['extractor' => 'parser'])
+            ->assertNotified('2 draft action item(s) added');
     }
 }

@@ -47,7 +47,7 @@
 
 ### [PROJ-016] Add Action Items button on RCA documents
 
-**Status:** Done
+**Status:** In Progress (iteration 2: AI extractor)
 **Priority:** P2
 **Start Date:** 2026-10-14
 
@@ -60,7 +60,17 @@ Owner request 2026-10-14: a button on each uploaded RCA document (Supporting Doc
 - [x] `add_action_items` row action on `InvestigationDocumentsRelationManager` — 2026-10-14
 - [x] 7 tests (`DocumentActionItemsTest`); pint; full suite 847/2,875 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
 - [x] Docs (CLAUDE.md dependency-map rows + baseline; this entry) — 2026-10-14
-- [ ] Owner live check: incident → Supporting Documents → completed RCA → "Add Action Items" → drafts appear in the Action Improvements tab with the provenance note; re-click → "Nothing new to add"
+
+#### Iteration 2 — AI extractor (owner 2026-10-14: "i think can select AI? so it know which action improvement not auto cut we can select all available model" + "you make the prompt so AI understand which to find and add and column in action improvement" + "like if PIC have multiple name, if user exist can auto to that user if not exist can be just name later can be edited")
+
+The deterministic parser's trimming mangled some items. The button now opens an **Extractor** picker — Fast parse (no AI) + every available model (default = AI default model; AI options gated on `isAvailable()`, so a config-without-gateway env keeps fast-parse-only). The AI path (`DocumentActionItemService::extractWithAi`, prompt `ai.prompts.document_action_items`) reads the whole document markdown and maps the register columns: title (≤100 chars, verb-first), detail (+ verification standard + Owner suffix), priority, due_date (strict Y-m-d + checkdate, else +30d — never invented), and owners — each owner resolved to an existing user by exact full name (team tag stripped): matched → auto-assigned as PIC (fires the existing assignment email, directory PICs included), unmatched → the name stays in the detail for later editing. DONE-marked items included (register counts existence). Failure/no-items share one honest warning naming both possibilities — no silent parser fallback.
+
+- [x] Prompt `ai.prompts.document_action_items` (config/ai.php) — 2026-10-14
+- [x] `extractWithAi()` + owner-name→user resolution + per-item due-date validation in `DocumentActionItemService` — 2026-10-14
+- [x] Extractor Select + parser/AI branch on the `add_action_items` action — 2026-10-14
+- [x] 4 tests (AI path with model+due_date+owner match, invalid date/priority fallback, empty result, explicit parser branch); pint; full suite 851/2,917 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
+- [x] Docs (CLAUDE.md row rewrite + baseline; this entry) — 2026-10-14
+- [ ] Owner live check: Dana Cicil RCA → Add Action Items → extractor defaults to the AI model → items come out whole (not auto-cut), due dates/owners mapped, matched users in PIC; Fast parse still selectable
 
 ### [PROJ-001] Initial SOP and Documentation Setup
 
