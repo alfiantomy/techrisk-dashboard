@@ -190,6 +190,7 @@ class ActionImprovementResource extends Resource
                     ->url(fn ($record): ?string => $record->incident
                         ? IncidentResource\Pages\EditIncident::getUrl(['record' => $record->incident])
                         : null),
+                ActionImprovementFormSchema::rewordAction(),
                 Tables\Actions\EditAction::make(),
             ])
             ->bulkActions([]);

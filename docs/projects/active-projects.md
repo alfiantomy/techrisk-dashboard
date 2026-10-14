@@ -47,7 +47,7 @@
 
 ### [PROJ-016] Add Action Items button on RCA documents
 
-**Status:** In Progress (iteration 2: AI extractor)
+**Status:** In Progress (iteration 3: AI rewording of drafts)
 **Priority:** P2
 **Start Date:** 2026-10-14
 
@@ -70,7 +70,17 @@ The deterministic parser's trimming mangled some items. The button now opens an 
 - [x] Extractor Select + parser/AI branch on the `add_action_items` action — 2026-10-14
 - [x] 4 tests (AI path with model+due_date+owner match, invalid date/priority fallback, empty result, explicit parser branch); pint; full suite 851/2,917 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
 - [x] Docs (CLAUDE.md row rewrite + baseline; this entry) — 2026-10-14
-- [ ] Owner live check: Dana Cicil RCA → Add Action Items → extractor defaults to the AI model → items come out whole (not auto-cut), due dates/owners mapped, matched users in PIC; Fast parse still selectable
+
+#### Iteration 3 — AI rewording of drafts (owner 2026-10-14: "maybe draft action improvement can also di rewording ? make it more professional and detail ?")
+
+Owner chose BOTH (via question): a per-row **Reword (AI)** button on drafts AND professional wording at extraction time. The shared row action (`ActionImprovementFormSchema::rewordAction()` — one builder wired into the relation manager and the global page) shows on **draft** rows only (AI available + `manage incidents`), offers the model picker (default = AI default model), and rewrites **title + detail only** through `ActionRewordService::reword()` (prompt `ai.prompts.action_reword` — imperative verb-first title ≤100 chars; 2–3-sentence professional detail expanding telegraphic phrasing; `Owner:` suffix + `_provenance_` note preserved verbatim; never invents systems/dates/owners). Status, PIC, due date and priority are never touched — the row stays a draft. The `document_action_items` extractor prompt was also tightened to reword casual/Indonesian phrasing into professional English at extraction, so AI-extracted drafts come out polished already (the button still covers fast-parse and manual drafts).
+
+- [x] Prompt `ai.prompts.action_reword` + `document_action_items` rewording tweak (config/ai.php) — 2026-10-14
+- [x] `ActionRewordService` (title+detail only, failure → false → danger toast) — 2026-10-14
+- [x] `rewordAction()` in `ActionImprovementFormSchema` + wired into relation manager + global resource — 2026-10-14
+- [x] 5 tests (`ActionRewordTest`); pint; full suite 856/2,946 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
+- [x] Docs (CLAUDE.md rows + baseline; this entry) — 2026-10-14
+- [ ] Owner live check: a draft from Fast parse → Reword (AI) → title/detail professional + more detailed, other columns untouched; button hidden on pending rows; same button on the global Action Improvements page
 
 ### [PROJ-001] Initial SOP and Documentation Setup
 

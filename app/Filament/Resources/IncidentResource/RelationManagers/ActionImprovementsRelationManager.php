@@ -142,6 +142,7 @@ class ActionImprovementsRelationManager extends RelationManager
                             ->when($recipients->isEmpty(), fn ($n) => $n->warning()->title('No matching users')->body('No registered users matched the PIC email(s).'))
                             ->send();
                     }),
+                ActionImprovementFormSchema::rewordAction(),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])

@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace App\Filament\Actions;
 
 use App\Models\ActionImprovement;
+use App\Models\AiSetting;
 use App\Models\User;
+use App\Services\ActionImprovements\ActionRewordService;
+use App\Services\Ai\AiTextService;
 use Filament\Forms;
+use Filament\Notifications\Notification;
+use Filament\Tables\Actions\Action;
 
 /**
  * Single source for the action-improvement form (PROJ-014) — consumed by the
@@ -77,6 +82,50 @@ class ActionImprovementFormSchema
                 ->visible(fn (Forms\Get $get): bool => $get('status') === ActionImprovement::STATUS_DONE)
                 ->columnSpanFull(),
         ];
+    }
+
+    /**
+     * Shared "Reword (AI)" row action (PROJ-016 iter 3, owner 2026-10-14):
+     * rewords a DRAFT's title + detail into professional English with more
+     * detail. Lives here so the relation manager and the global resource
+     * cannot drift (same reason as the schema and the color maps).
+     */
+    public static function rewordAction(): Action
+    {
+        return Action::make('reword')
+            ->label('Reword (AI)')
+            ->icon('heroicon-o-sparkles')
+            ->color('primary')
+            ->requiresConfirmation()
+            ->modalDescription('Rewrite the title and detail in professional English with more detail. The meaning is preserved; PIC, due date, priority and status are not changed.')
+            ->visible(fn ($record): bool => $record->status === ActionImprovement::STATUS_DRAFT
+                && app(AiTextService::class)->isAvailable()
+                && (bool) auth()->user()?->can('manage incidents'))
+            ->form(function () {
+                $models = app(AiTextService::class)->getModelsForPicker();
+                $default = AiSetting::get('default_model', config('ai.default_model', 'SMART-MODEL'));
+
+                return [
+                    Forms\Components\Select::make('model')
+                        ->label('AI Model')
+                        ->options($models)
+                        ->default(isset($models[$default]) ? $default : array_key_first($models))
+                        ->required(),
+                ];
+            })
+            ->action(function ($record, array $data) {
+                app(ActionRewordService::class)->reword($record, $data['model'])
+                    ? Notification::make()
+                        ->title('Reworded')
+                        ->body('Review the title and detail before promoting the draft.')
+                        ->success()
+                        ->send()
+                    : Notification::make()
+                        ->title('Reword failed')
+                        ->body('The model returned nothing usable. Try another model.')
+                        ->danger()
+                        ->send();
+            });
     }
 
     /** Shared badge colors — the relation manager and global resource must not drift. */
