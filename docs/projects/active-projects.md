@@ -354,6 +354,36 @@ Owner request 2026-10-13 (grounded in the VP TechOps PDFs: `detection-response-g
 
 ---
 
+### [PROJ-014] Action Improvements: global page, closeout, priority, AI drafts
+
+**Status:** Done (code complete; prod migrate pending owner)
+**Priority:** P2
+**Start Date:** 2026-10-14
+
+#### Description
+Owner picked the full menu (2026-10-14) after a gap review. Four big features + four quick wins, all shipped:
+1. **Global Action Improvements page** (`ActionImprovementResource`, nav sort 3, `clipboard-document-check`) — every action across incidents, scoped `whereHas('incident', applyUserYearAccess())` (IssueResource precedent; policy as-is: viewAny = `view incidents` OR `access api`). Columns: title+detail, incident link, priority/escalation/status badges, overdue-styled due date, pic_email, completed_at + closer name. Same status/priority/overdue filters as the relation manager; no bulk actions.
+2. **Closeout tracking** (migration `2026_10_14_000001`) — `completed_at`/`completed_by`/`result_note`; `ActionImprovementObserver::saving()` stamps on transition INTO done (`??=` — re-saves don't re-stamp) and clears both on reopen; `saveQuietly` paths (reminder recording) never stamp.
+3. **Priority field** — low/medium/high/critical, **optional, DB default 'low'** (owner-specified). Constants `ActionImprovement::PRIORITIES`; form default low, badge colors via `ActionImprovementFormSchema::priorityColor()`.
+4. **AI "Suggest Actions" button** — relation-manager header action (`manage incidents` gate) dispatches `GenerateActionSuggestionsJob` → `ActionSuggestionService::generate()` (one `callAiForJson` over `generateCompact()` + retro when present; prompt `ai.prompts.action_suggestions`) → ≤8 draft rows (status **draft**, due +30d, reminder off), titles deduped case-insensitively against existing rows (re-run = 0 new); requester gets an in-app `ActionImprovementsSuggested` notice (success/0-created/failed variants). Drafts stay out of reminders/overdue (existing `status = 'pending'` gates).
+Quick wins: relation-manager + global filters (status/priority/Ternary overdue), dashboard widget Overdue stat ("N escalated to a manager") + Avg Days to Close, escalation badge columns (`L1–L3` + last-escalated date, visible only when > 0), **'Cancelled' status** (values-only — reminder/escalation/governance-overdue all `pending`-gated so cancelled drops out with zero extra code; `registerCompletenessPct()` deliberately unchanged — it counts action-item EXISTENCE, so a cancelled item still satisfies register completeness).
+
+Shared form single-source: `ActionImprovementFormSchema` (schema + status/priority color maps) consumed by both the relation manager and the global resource — the two surfaces cannot drift.
+
+Bug caught by the new tests before merge: the widget's aging/closeout queries cloned a builder that had already `groupBy('status')` — the clone dragged the GROUP BY into them (aging returned the FIRST GROUP's numbers → overdue would read ~0 in prod; closeout hydration picked an arbitrary group row → null completed_at crash). Fixed with a fresh `$scoped()` builder per stat; recorded as edit-safety rule 6. API write routes stay disabled (read-only by security decision) — the Store/Update request rules (`status: pending,done,cancelled`; `priority in:low,medium,high,critical`) are validated directly so they're covered whenever writes re-enable.
+
+#### Tasks
+- [x] Wave 1: migration + model constants/casts/relations + observer closeout stamping + API request rules — 2026-10-14
+- [x] Wave 2: ActionImprovementFormSchema + relation-manager rewrite (filters, priority/escalation columns, Suggest Actions) + global ActionImprovementResource/List/Edit — 2026-10-14
+- [x] Wave 3: widget 4-stat layout (Overdue + escalated description, Avg Days to Close; groupBy-clone bug fixed) — 2026-10-14
+- [x] Wave 4: config prompt + ActionSuggestionService + job + notification + getNotificationType arm — 2026-10-14
+- [x] Tests: `ActionImprovementLifecycleTest` (11) — closeout stamp/clear/quietly, priority default + cancelled-reminders, request rules, global page year-access/overdue filter/escalation badge, relation manager render, widget aging/closeout, AI dedupe + re-run 0 + requester notify — 2026-10-14; baseline 835/2825
+- [x] Docs: CLAUDE.md dependency-map rows + business rules + edit-safety rule 6 + baseline — 2026-10-14
+- [ ] Owner runs `php artisan migrate --force` on prod (same run now covers `2026_10_13_000001`–`2026_10_14_000001`); local dev already migrated
+- [ ] Owner live check: global page nav + filters, done → completed stamp, AI Suggest Actions on a real incident
+
+---
+
 ### [PROJ-013] PIC directory on users + org-tree escalation
 
 **Status:** Done (code complete; prod migrate pending owner)

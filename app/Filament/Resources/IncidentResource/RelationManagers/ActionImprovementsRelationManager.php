@@ -4,14 +4,17 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources\IncidentResource\RelationManagers;
 
+use App\Filament\Actions\ActionImprovementFormSchema;
+use App\Models\ActionImprovement;
 use App\Models\User;
 use App\Notifications\ActionImprovementReminder;
 use App\Support\ReminderMail;
-use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 
 class ActionImprovementsRelationManager extends RelationManager
@@ -20,60 +23,14 @@ class ActionImprovementsRelationManager extends RelationManager
 
     private function isOverdue($record): bool
     {
-        return $record->status === 'pending'
+        return $record->status === ActionImprovement::STATUS_PENDING
             && $record->due_date !== null
             && $record->due_date->isBefore(today());
     }
 
     public function form(Form $form): Form
     {
-        return $form
-            ->schema([
-                Forms\Components\TextInput::make('title')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\Textarea::make('detail')
-                    ->required()
-                    ->columnSpanFull(),
-                Forms\Components\DatePicker::make('due_date')
-                    ->required(),
-                Forms\Components\Select::make('pic_email')
-                    ->label('Person In Charge')
-                    ->required()
-                    ->multiple()
-                    ->searchable()
-                    ->preload()
-                    // Keyed by email — pic_email keeps storing bare emails.
-                    ->options(fn () => User::humanUsers()->orderBy('name')->get()
-                        ->mapWithKeys(fn ($u) => [$u->email => $u->name]))
-                    ->createOptionModalHeading('Add new PIC contact')
-                    ->createOptionForm([
-                        Forms\Components\TextInput::make('name'),
-                        Forms\Components\TextInput::make('email')->email()->required(),
-                    ])
-                    // Directory contact, login-disabled (single home:
-                    // User::upsertFromPicEmails — flip can_login to grant access).
-                    ->createOptionUsing(function (array $data): string {
-                        $tag = filled($data['name'] ?? null) ? "{$data['name']} <{$data['email']}>" : $data['email'];
-
-                        return User::upsertFromPicEmails([$tag])[0];
-                    })
-                    ->helperText('Search by name — or use + to add a new contact (no login access until enabled in User Management).'),
-                Forms\Components\Toggle::make('reminder'),
-                Forms\Components\Select::make('reminder_frequency')
-                    ->options([
-                        'weekly' => 'Once a week',
-                        'biweekly' => 'Once every 2 weeks',
-                    ]),
-                Forms\Components\Select::make('status')
-                    ->options([
-                        'draft' => 'Draft (AI-suggested)',
-                        'pending' => 'Pending',
-                        'done' => 'Done',
-                    ])
-                    ->default('pending')
-                    ->required(),
-            ]);
+        return $form->schema(ActionImprovementFormSchema::schema());
     }
 
     public function table(Table $table): Table
@@ -82,8 +39,14 @@ class ActionImprovementsRelationManager extends RelationManager
             ->recordTitleAttribute('title')
             ->columns([
                 Tables\Columns\TextColumn::make('title'),
+                Tables\Columns\TextColumn::make('priority')
+                    ->badge()
+                    ->color(fn (string $state): string => ActionImprovementFormSchema::priorityColor($state))
+                    ->sortable()
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('due_date')
                     ->date()
+                    ->sortable()
                     // RD-3: overdue pending rows are visible in-UI, not just
                     // in the opt-in reminder emails.
                     ->color(fn ($record): string => $this->isOverdue($record) ? 'danger' : 'default')
@@ -94,12 +57,15 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->boolean(),
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
-                        'draft' => 'gray',
-                        'pending' => 'warning',
-                        'done' => 'success',
-                        default => 'secondary',
-                    }),
+                    ->color(fn (string $state): string => ActionImprovementFormSchema::statusColor($state)),
+                Tables\Columns\TextColumn::make('escalation_level')
+                    ->label('Escalation')
+                    ->badge()
+                    ->formatStateUsing(fn ($state): string => 'L'.$state)
+                    ->color('danger')
+                    ->description(fn ($record): ?string => $record->last_escalated_at?->format('M d, Y'))
+                    ->visible(fn ($record): bool => ($record->escalation_level ?? 0) > 0)
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('last_reminded_at')
                     ->label('Last email')
                     ->dateTime()
@@ -107,10 +73,46 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->description(fn ($record): ?string => $record->reminders_sent > 0 ? $record->reminders_sent.' reminder(s) emailed' : null),
             ])
             ->filters([
-                //
+                SelectFilter::make('status')
+                    ->options([
+                        ActionImprovement::STATUS_DRAFT => 'Draft',
+                        ActionImprovement::STATUS_PENDING => 'Pending',
+                        ActionImprovement::STATUS_DONE => 'Done',
+                        ActionImprovement::STATUS_CANCELLED => 'Cancelled',
+                    ]),
+                SelectFilter::make('priority')
+                    ->options(array_combine(ActionImprovement::PRIORITIES, array_map('ucfirst', ActionImprovement::PRIORITIES))),
+                TernaryFilter::make('overdue')
+                    ->queries(
+                        fn ($query) => $query
+                            ->where('status', ActionImprovement::STATUS_PENDING)
+                            ->whereDate('due_date', '<', today()),
+                        fn ($query) => $query
+                            ->where(fn ($q) => $q
+                                ->where('status', '!=', ActionImprovement::STATUS_PENDING)
+                                ->orWhereDate('due_date', '>=', today())),
+                    ),
             ])
             ->headerActions([
                 Tables\Actions\CreateAction::make(),
+                // PROJ-014: draft actions from AI over the incident context.
+                // Queued — one AI call; the requester gets an in-app notice.
+                Tables\Actions\Action::make('suggest_actions')
+                    ->label('Suggest Actions (AI)')
+                    ->icon('heroicon-o-sparkles')
+                    ->color('primary')
+                    ->requiresConfirmation()
+                    ->modalDescription('Ask AI to draft action improvements from this incident\'s data. Drafts appear in the table with status Draft — review and promote them. Already-suggested actions are skipped.')
+                    ->visible(fn (): bool => (bool) auth()->user()?->can('manage incidents'))
+                    ->action(function () {
+                        \App\Jobs\GenerateActionSuggestionsJob::dispatch($this->getOwnerRecord(), auth()->user());
+
+                        Notification::make()
+                            ->info()
+                            ->title('Generating suggestions')
+                            ->body('AI is drafting action improvements — you will get a notification when it is done.')
+                            ->send();
+                    }),
             ])
             ->actions([
                 Tables\Actions\Action::make('send_reminder')
@@ -119,7 +121,7 @@ class ActionImprovementsRelationManager extends RelationManager
                     ->color('info')
                     ->requiresConfirmation()
                     ->modalDescription('Send a reminder email to the assigned PIC email(s) via Netcore.')
-                    ->visible(fn ($record) => $record->status === 'pending')
+                    ->visible(fn ($record) => $record->status === ActionImprovement::STATUS_PENDING)
                     ->action(function ($record) {
                         $recipients = collect($record->pic_email ?? [])
                             ->map(fn ($email) => User::where('email', $email)->first())

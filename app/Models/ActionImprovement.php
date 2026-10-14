@@ -15,6 +15,20 @@ class ActionImprovement extends Model implements Auditable
     use HasFactory;
     use \OwenIt\Auditing\Auditable;
 
+    /** Status lifecycle: draft (AI-suggested) → pending → done | cancelled. */
+    public const STATUS_DRAFT = 'draft';
+
+    public const STATUS_PENDING = 'pending';
+
+    public const STATUS_DONE = 'done';
+
+    public const STATUS_CANCELLED = 'cancelled';
+
+    public const STATUSES = [self::STATUS_DRAFT, self::STATUS_PENDING, self::STATUS_DONE, self::STATUS_CANCELLED];
+
+    /** Priority — optional everywhere, default low (owner rule 2026-10-14). */
+    public const PRIORITIES = ['low', 'medium', 'high', 'critical'];
+
     protected $fillable = [
         'incident_id',
         'title',
@@ -23,9 +37,15 @@ class ActionImprovement extends Model implements Auditable
         'pic_email',
         'reminder',
         'reminder_frequency',
+        'priority',
         'status',
         'last_reminded_at',
         'reminders_sent',
+        'completed_at',
+        'completed_by',
+        'result_note',
+        'escalation_level',
+        'last_escalated_at',
     ];
 
     protected $casts = [
@@ -35,11 +55,20 @@ class ActionImprovement extends Model implements Auditable
         'due_date' => 'date',
         'last_reminded_at' => 'datetime',
         'reminders_sent' => 'integer',
+        'completed_at' => 'datetime',
+        'escalation_level' => 'integer',
+        'last_escalated_at' => 'datetime',
     ];
 
     public function incident(): BelongsTo
     {
         return $this->belongsTo(Incident::class);
+    }
+
+    /** Who flipped this to done — stamped by ActionImprovementObserver. */
+    public function completedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'completed_by');
     }
 
     /**

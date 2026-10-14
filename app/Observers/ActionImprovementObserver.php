@@ -14,11 +14,26 @@ class ActionImprovementObserver
      * Normalize pic_email tags ("Name <email>" suggestions from the directory
      * become bare emails) and upsert every address into the user directory
      * (owner request 2026-10-13) before anything else reads them.
+     *
+     * Closeout stamping (PROJ-014): transition INTO done stamps completed_at
+     * + completed_by; transition back out clears them. Pre-done rows keep
+     * whatever they have (re-saving a done row doesn't re-stamp).
      */
     public function saving(ActionImprovement $actionImprovement): void
     {
         if (is_array($actionImprovement->pic_email) && $actionImprovement->pic_email !== []) {
             $actionImprovement->pic_email = User::upsertFromPicEmails($actionImprovement->pic_email);
+        }
+
+        $wasDone = ($actionImprovement->getOriginal('status') ?? null) === ActionImprovement::STATUS_DONE;
+        $isDone = $actionImprovement->status === ActionImprovement::STATUS_DONE;
+
+        if ($isDone && ! $wasDone) {
+            $actionImprovement->completed_at ??= now();
+            $actionImprovement->completed_by ??= auth()->id();
+        } elseif ($wasDone && ! $isDone) {
+            $actionImprovement->completed_at = null;
+            $actionImprovement->completed_by = null;
         }
     }
 

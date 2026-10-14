@@ -169,6 +169,7 @@ class User extends Authenticatable implements Auditable, FilamentUser
             \App\Notifications\ActionImprovementDueSoon::class => 'action_improvement_reminder',
             \App\Notifications\ActionImprovementOverdue::class => 'action_improvement_overdue',
             \App\Notifications\ActionImprovementEscalated::class => 'action_improvement_escalated',
+            \App\Notifications\ActionImprovementsSuggested::class => 'action_improvement_suggested',
             \App\Notifications\ActionImprovementAssigned::class => 'action_improvement_assigned',
             \App\Notifications\AdminAnnouncement::class => 'admin_announcement',
             \App\Notifications\IncidentNotDoneReminder::class => 'incident_not_done_reminder',

@@ -22,7 +22,9 @@ class StoreActionImprovementRequest extends ApiFormRequest
             'pic_email' => ['required', 'array'],
             'reminder' => ['boolean'],
             'reminder_frequency' => ['nullable', 'string'],
-            'status' => ['string', 'in:pending,done'],
+            'priority' => ['string', 'in:low,medium,high,critical'],
+            'status' => ['string', 'in:pending,done,cancelled'],
+            'result_note' => ['nullable', 'string'],
         ];
     }
 }
