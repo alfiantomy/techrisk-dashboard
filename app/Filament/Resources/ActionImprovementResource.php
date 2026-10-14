@@ -64,6 +64,13 @@ class ActionImprovementResource extends Resource
                     ->getTitleFromRecordUsing(fn ($record): string => $record->incident
                         ? "{$record->incident->no} — {$record->incident->title}"
                         : '—')
+                    // Owner 2026-10-14: groups ordered by incident recency
+                    // (not the "no" string) so the latest incident is first.
+                    ->orderQueryUsing(fn ($query, $direction) => $query->orderBy(
+                        Incident::select('incident_date')
+                            ->whereColumn('incidents.id', 'action_improvements.incident_id'),
+                        $direction,
+                    ))
                     ->collapsible(),
                 Group::make('pic_email')
                     ->label('PIC')
@@ -91,6 +98,7 @@ class ActionImprovementResource extends Resource
                         : null),
                 TextColumn::make('title')
                     ->searchable()
+                    ->limit(35)
                     ->description(fn ($record): ?string => \Illuminate\Support\Str::limit($record->detail, 60)),
                 TextColumn::make('incident.title')
                     ->label('Incident Title')
@@ -99,7 +107,7 @@ class ActionImprovementResource extends Resource
                         ? IncidentResource\Pages\EditIncident::getUrl(['record' => $record->incident])
                         : null)
                     ->color('primary')
-                    ->limit(40)
+                    ->limit(25)
                     ->description(fn ($record): ?string => $record->incident
                         ? strtoupper($record->incident->severity?->value ?? '').' · '.($record->incident->incident_status?->value ?? '')
                         : null),

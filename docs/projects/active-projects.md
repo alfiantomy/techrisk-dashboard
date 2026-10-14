@@ -371,6 +371,7 @@ Owner follow-up (2026-10-14, right after PROJ-014): "action improvement pages ne
 - [x] Table upgrade (groups + defaultGroup + incident columns + comprehensive toggleables) — 2026-10-14
 - [x] 4 tests; pint; full suite 839/2,838 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
 - [x] Docs (CLAUDE.md resource row + baseline; this entry) — 2026-10-14
+- [x] Iteration 2 (owner 2026-10-14): incident groups open **latest-first** — `ListActionImprovements::mount()` seeds `tableGroupingDirection = 'desc'` (dropdown still flips it) and the incident Group orders by an `incident_date` subquery, not the `no` string (a higher no ≠ newer). Title columns shrunk: action title limit 35, incident.title 25. +1 test/+1 assertion → 840/2,839 — 2026-10-14
 - [ ] Later (owner): per-person / team grouping — needs a real relation (e.g. PIC pivot to users or a team column), not the pic_email array cast
 
 ---

@@ -11,6 +11,15 @@ class ListActionImprovements extends ListRecords
 {
     protected static string $resource = ActionImprovementResource::class;
 
+    public function mount(): void
+    {
+        // Owner 2026-10-14: incident groups newest-first by default; the
+        // direction dropdown still lets users flip to ascending.
+        $this->tableGroupingDirection = 'desc';
+
+        parent::mount();
+    }
+
     protected function getHeaderWidgets(): array
     {
         return [];

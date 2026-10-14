@@ -207,6 +207,21 @@ class ActionImprovementLifecycleTest extends TestCase
             ->assertSee('Incident No');
     }
 
+    public function test_incident_groups_default_to_latest_first(): void
+    {
+        $this->actingAs($this->viewer());
+        // Newest incident deliberately carries the LOWER "no" — proves the
+        // groups order by incident_date, not the "no" string.
+        $newest = $this->incident(['no' => '2026_IN_P1_100', 'title' => 'September outage', 'incident_date' => '2026-09-30']);
+        $oldest = $this->incident(['no' => '2026_IN_P1_900', 'title' => 'January glitch', 'incident_date' => '2026-01-05']);
+        $this->action(['incident_id' => $newest->id]);
+        $this->action(['incident_id' => $oldest->id]);
+
+        Livewire::test(ListActionImprovements::class)
+            ->assertSet('tableGroupingDirection', 'desc')
+            ->assertSeeInOrder(['September outage', 'January glitch']);
+    }
+
     public function test_global_page_searches_across_incident_fields(): void
     {
         $this->actingAs($this->viewer());
