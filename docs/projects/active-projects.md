@@ -354,6 +354,27 @@ Owner request 2026-10-13 (grounded in the VP TechOps PDFs: `detection-response-g
 
 ---
 
+### [PROJ-015] Action Improvements page: incident visibility + grouping + comprehensive table
+
+**Status:** Done
+**Priority:** P2
+**Start Date:** 2026-10-14
+
+#### Description
+Owner follow-up (2026-10-14, right after PROJ-014): "action improvement pages need which incident its on? can be group by incident? comprehensive table like incident pages? can edit from that page like now its already good. and know which people or group by people / team later." All in `ActionImprovementResource::table()` — one production file, no schema change:
+- **Incident visibility**: `incident.no` badge (searchable, linked) + `incident.title` (searchable, linked, severity · status description) — relationship search is automatic in Filament 3.3 (`whereRelation` LIKE).
+- **Grouping**: default view opens **grouped by incident** (owner choice via question — header "no — title", collapsible); group dropdown also offers PIC / Status / Priority. PIC group = exact email-combo (array cast → `getKeyFromRecordUsing`/`getTitleFromRecordUsing`, 'Unassigned' for empty); per-person/team grouping deferred (needs a real relation) per owner "later".
+- **Comprehensive columns** (Incident-table style): Created, reminder + frequency, Last email (+ sent count), `result_note` under Completed — all toggleable, extras hidden by default. Edit stays the shared `ActionImprovementFormSchema` form.
+- +4 tests/+13 assertions → baseline **839/2,838** (grouped default render, relationship search, PIC-combo group, toggleable columns via empty `toggledTableColumns` map).
+
+#### Tasks
+- [x] Table upgrade (groups + defaultGroup + incident columns + comprehensive toggleables) — 2026-10-14
+- [x] 4 tests; pint; full suite 839/2,838 (1 known pre-existing RunAiAgentJobTest failure) — 2026-10-14
+- [x] Docs (CLAUDE.md resource row + baseline; this entry) — 2026-10-14
+- [ ] Later (owner): per-person / team grouping — needs a real relation (e.g. PIC pivot to users or a team column), not the pic_email array cast
+
+---
+
 ### [PROJ-014] Action Improvements: global page, closeout, priority, AI drafts
 
 **Status:** Done (code complete; prod migrate pending owner)

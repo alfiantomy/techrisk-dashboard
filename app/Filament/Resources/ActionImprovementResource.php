@@ -11,9 +11,11 @@ use App\Models\Incident;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -56,17 +58,51 @@ class ActionImprovementResource extends Resource
 
         return $table
             ->defaultSort('due_date')
+            ->groups([
+                $incidentGroup = Group::make('incident.no')
+                    ->label('Incident')
+                    ->getTitleFromRecordUsing(fn ($record): string => $record->incident
+                        ? "{$record->incident->no} — {$record->incident->title}"
+                        : '—')
+                    ->collapsible(),
+                Group::make('pic_email')
+                    ->label('PIC')
+                    // Array cast — one group key per record: groups by the
+                    // exact email combo (per-person grouping needs a real
+                    // relation, owner's "later").
+                    ->getKeyFromRecordUsing(fn ($record): string => implode(', ', $record->pic_email ?? []))
+                    ->getTitleFromRecordUsing(fn ($record): string => implode(', ', $record->pic_email ?? []) ?: 'Unassigned'),
+                Group::make('status')
+                    ->getTitleFromRecordUsing(fn ($record): string => ucfirst((string) $record->status)),
+                Group::make('priority')
+                    ->getTitleFromRecordUsing(fn ($record): string => ucfirst((string) $record->priority)),
+            ])
+            // Owner 2026-10-14: open grouped by incident — "which incident is
+            // this on" at a glance; ungroup/switch from the dropdown.
+            ->defaultGroup($incidentGroup)
             ->columns([
+                TextColumn::make('incident.no')
+                    ->label('Incident No')
+                    ->badge()
+                    ->color('primary')
+                    ->searchable()
+                    ->url(fn ($record): ?string => $record->incident
+                        ? IncidentResource\Pages\EditIncident::getUrl(['record' => $record->incident])
+                        : null),
                 TextColumn::make('title')
                     ->searchable()
                     ->description(fn ($record): ?string => \Illuminate\Support\Str::limit($record->detail, 60)),
                 TextColumn::make('incident.title')
-                    ->label('Incident')
+                    ->label('Incident Title')
+                    ->searchable()
                     ->url(fn ($record): ?string => $record->incident
                         ? IncidentResource\Pages\EditIncident::getUrl(['record' => $record->incident])
                         : null)
                     ->color('primary')
-                    ->limit(30),
+                    ->limit(40)
+                    ->description(fn ($record): ?string => $record->incident
+                        ? strtoupper($record->incident->severity?->value ?? '').' · '.($record->incident->incident_status?->value ?? '')
+                        : null),
                 TextColumn::make('priority')
                     ->badge()
                     ->color(fn (string $state): string => ActionImprovementFormSchema::priorityColor($state))
@@ -100,8 +136,24 @@ class ActionImprovementResource extends Resource
                     ->dateTime('M d, Y')
                     ->sortable()
                     ->placeholder('—')
-                    ->description(fn ($record): ?string => $record->completedBy?->name)
+                    ->description(fn ($record): ?string => trim(($record->completedBy?->name ?? '').($record->result_note ? ' · '.\Illuminate\Support\Str::limit($record->result_note, 40) : '')) ?: null)
                     ->toggleable(),
+                TextColumn::make('created_at')
+                    ->label('Created')
+                    ->date('M d, Y')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                IconColumn::make('reminder')
+                    ->boolean()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('reminder_frequency')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('last_reminded_at')
+                    ->label('Last email')
+                    ->dateTime('M d, Y')
+                    ->placeholder('—')
+                    ->description(fn ($record): ?string => $record->reminders_sent > 0 ? $record->reminders_sent.' reminder(s) emailed' : null)
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
                 SelectFilter::make('status')

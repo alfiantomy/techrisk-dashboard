@@ -184,6 +184,77 @@ class ActionImprovementLifecycleTest extends TestCase
         Livewire::test(ListActionImprovements::class)->assertSee('L2');
     }
 
+    // ---- PROJ-015: incident visibility + grouping + comprehensive table ----
+
+    private function viewer(): User
+    {
+        Permission::firstOrCreate(['name' => 'view incidents']);
+        Permission::firstOrCreate(['name' => 'access dashboard']);
+
+        return User::factory()->create()->givePermissionTo('view incidents', 'access dashboard');
+    }
+
+    public function test_global_page_groups_by_incident_by_default(): void
+    {
+        $this->actingAs($this->viewer());
+        $incident = $this->incident(['no' => '2026_IN_P2_042', 'title' => 'Payment gateway timeout']);
+        $this->action(['incident_id' => $incident->id, 'title' => 'Add retry policy']);
+
+        // Default view = grouped by incident: heading carries no + title.
+        Livewire::test(ListActionImprovements::class)
+            ->assertSee('2026_IN_P2_042 — Payment gateway timeout')
+            ->assertSee('Add retry policy')
+            ->assertSee('Incident No');
+    }
+
+    public function test_global_page_searches_across_incident_fields(): void
+    {
+        $this->actingAs($this->viewer());
+        $hit = $this->action(['title' => 'Add retry policy']);
+        $hit->incident->update(['title' => 'Payment gateway timeout saga']);
+        $miss = $this->action(['title' => 'Unrelated action']);
+        $miss->incident->update(['title' => 'Database corruption']);
+
+        Livewire::test(ListActionImprovements::class)
+            ->set('tableSearch', 'gateway timeout')
+            ->assertCanSeeTableRecords([$hit])
+            ->assertCanNotSeeTableRecords([$miss]);
+    }
+
+    public function test_global_page_groups_by_pic_combo(): void
+    {
+        $this->actingAs($this->viewer());
+        $assigned = $this->action(['pic_email' => ['ana@x.id', 'budi@x.id']]);
+        $unassigned = $this->action(['pic_email' => []]);
+
+        Livewire::test(ListActionImprovements::class)
+            ->set('tableGrouping', 'pic_email')
+            ->assertSee('ana@x.id, budi@x.id')
+            ->assertSee('Unassigned')
+            ->assertCanSeeTableRecords([$assigned, $unassigned]);
+    }
+
+    public function test_global_page_comprehensive_columns_render(): void
+    {
+        $viewer = $this->viewer();
+        $this->actingAs($viewer); // observer stamps completed_by = this user
+        $done = $this->action(['status' => 'done']);
+        $done->forceFill([
+            'result_note' => 'Verified by reconciliation report',
+            'last_reminded_at' => now()->subDays(2),
+            'reminders_sent' => 3,
+        ])->saveQuietly();
+
+        Livewire::test(ListActionImprovements::class)
+            // result_note + closer name show under Completed (visible by default).
+            ->assertSee('Verified by reconciliation report')
+            ->assertSee($viewer->name)
+            // An empty toggle map shows every toggleable column.
+            ->set('toggledTableColumns', [])
+            ->assertSee('Last email')
+            ->assertSee('3 reminder(s) emailed');
+    }
+
     public function test_relation_manager_renders_new_fields_and_filters(): void
     {
         Permission::firstOrCreate(['name' => 'view incidents']);
