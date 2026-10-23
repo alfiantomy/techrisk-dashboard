@@ -15,14 +15,18 @@ use Maatwebsite\Excel\Concerns\WithMultipleSheets;
  * Quarterly Report preset — the owner's hand-made quarterly report as a
  * live export. 4 case tabs with the All Tabs membership rules plus one
  * tab per quarter holding only that quarter's incidents (no Summary
- * sheet — owner 2026-10-05). Scope is always the full filtered set; the
- * quarter tabs are the breakdown.
+ * sheet — owner 2026-10-05). All Cases + quarter tabs run on the
+ * baseline set (widget-aligned: Confirmed loss + Non fundLoss, owner
+ * rule 2026-10-23); the dedicated membership tabs (Recovered / Fund
+ * Loss / Non Fund Loss) keep every fund status via $dedicatedQuery.
+ * Every tab's MTBF sequence = the baseline set.
  */
 class QuarterlyReportExport implements WithMultipleSheets
 {
-    public function __construct(protected Builder $query)
+    public function __construct(protected Builder $query, protected ?Builder $dedicatedQuery = null)
     {
         $this->query = $query->clone();
+        $this->dedicatedQuery = ($dedicatedQuery ?? $query)->clone();
     }
 
     public function sheets(): array
@@ -43,9 +47,9 @@ class QuarterlyReportExport implements WithMultipleSheets
 
         return [
             new QuarterlyCaseSheet($this->incidentQuery(), 'All Cases', $this->query),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('recovered_fund', '>', 0), 'Recovered Cases', $this->query),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::ConfirmedLoss->value), 'Fund Loss', $this->query),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::NonFundLoss->value), 'Non Fund Loss', $this->query),
+            new QuarterlyCaseSheet($this->dedicatedIncidentQuery()->where('recovered_fund', '>', 0), 'Recovered Cases', $this->query),
+            new QuarterlyCaseSheet($this->dedicatedIncidentQuery()->where('fund_status', FundStatus::ConfirmedLoss->value), 'Fund Loss', $this->query),
+            new QuarterlyCaseSheet($this->dedicatedIncidentQuery()->where('fund_status', FundStatus::NonFundLoss->value), 'Non Fund Loss', $this->query),
             ...$quarterSheets,
         ];
     }
@@ -54,6 +58,15 @@ class QuarterlyReportExport implements WithMultipleSheets
     private function incidentQuery(): Builder
     {
         return $this->query->clone()
+            ->where('classification', IncidentClassification::Incident->value)
+            ->with('labels')
+            ->orderBy('incident_date', 'asc');
+    }
+
+    /** Same shape off the dedicated (all-fund-statuses) base. */
+    private function dedicatedIncidentQuery(): Builder
+    {
+        return $this->dedicatedQuery->clone()
             ->where('classification', IncidentClassification::Incident->value)
             ->with('labels')
             ->orderBy('incident_date', 'asc');

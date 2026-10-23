@@ -188,6 +188,34 @@ class ExportActionSchema
     }
 
     /**
+     * The widgets' MTBF scope (owner rule 2026-10-23): Confirmed loss +
+     * Non fundLoss only — the same rows the dashboard MTBF cards count.
+     * Strict on purpose: a null fund_status counts in no widget number,
+     * so it counts in no baseline number either.
+     */
+    public static function widgetFundScope(Builder $query): Builder
+    {
+        return $query->whereIn('fund_status', [
+            FundStatus::ConfirmedLoss->value,
+            FundStatus::NonFundLoss->value,
+        ]);
+    }
+
+    /**
+     * The baseline set for general surfaces (All Cases / Completed /
+     * quarter tabs, Custom, Executive data). Widget-aligned by default;
+     * an explicit Fund Status filter wins over the default (owner rule
+     * 2026-10-23). Dedicated fund-status tabs do NOT use this — they
+     * keep their own membership rows.
+     */
+    public static function baselineQuery(Builder $query, array $data): Builder
+    {
+        $baseline = $query->clone();
+
+        return empty($data['f_fund_status'] ?? []) ? self::widgetFundScope($baseline) : $baseline;
+    }
+
+    /**
      * Apply the optional export filters on top of the table's current filters.
      */
     public static function applyFilters(Builder $query, array $data): Builder

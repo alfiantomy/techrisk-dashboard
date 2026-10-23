@@ -57,11 +57,14 @@ class ListIncidents extends ListRecords
                 ->form(fn () => ExportActionSchema::form())
                 ->action(function (array $data) {
                     $query = ExportActionSchema::applyFilters($this->getFilteredTableQuery()->clone(), $data);
+                    // Widget-aligned baseline (Confirmed loss + Non fundLoss) unless
+                    // the user picked fund statuses — owner rule 2026-10-23.
+                    $baseline = ExportActionSchema::baselineQuery($query, $data);
 
                     if (($data['preset'] ?? 'executive') === 'executive') {
                         // BUG-013: store → inject chart caches → download, so the
                         // native charts render in Numbers/QuickLook/Sheets too.
-                        $export = new \App\Exports\ExecutiveIncidentsExport($query);
+                        $export = new \App\Exports\ExecutiveIncidentsExport($baseline);
                         $fname = 'executive-report-'.now()->format('Y-m-d').'.xlsx';
                         $tmp = storage_path('app/private/temp/'.$fname);
                         @mkdir(dirname($tmp), 0777, true);
@@ -75,7 +78,7 @@ class ListIncidents extends ListRecords
 
                     if ($data['preset'] === 'quarterly_report') {
                         return Excel::download(
-                            new \App\Exports\QuarterlyReportExport($query),
+                            new \App\Exports\QuarterlyReportExport($baseline, $query),
                             'quarterly-report-'.now()->format('Y-m-d').'.xlsx'
                         );
                     }
@@ -89,7 +92,7 @@ class ListIncidents extends ListRecords
 
                     if ($data['preset'] === 'all_tabs') {
                         return Excel::download(
-                            new MultiSheetIncidentsExport($query, array_values(ExportActionSchema::columnOptions()), array_keys(ExportActionSchema::columnOptions())),
+                            new MultiSheetIncidentsExport($baseline, array_values(ExportActionSchema::columnOptions()), array_keys(ExportActionSchema::columnOptions()), $query),
                             'incidents-all-tabs-'.now()->format('Y-m-d').'.xlsx'
                         );
                     }
@@ -101,27 +104,27 @@ class ListIncidents extends ListRecords
 
                     $format = $data['format'];
 
-                    $query->orderBy('incident_date', 'asc');
+                    $baseline->orderBy('incident_date', 'asc');
 
-                    $totalCases = $query->count();
+                    $totalCases = $baseline->count();
 
-                    $avgMtbf = app(\App\Filament\Statistics\IncidentStatsFooterData::class)->build($query)['avgMtbf'];
+                    $avgMtbf = app(\App\Filament\Statistics\IncidentStatsFooterData::class)->build($baseline)['avgMtbf'];
 
                     // BUG-021: DECIMAL aggregates are strings on MySQL — cast for
                     // number_format() inside the strict-typed export classes.
                     $stats = [
                         'totalCases' => $totalCases,
-                        'avgMttr' => round((float) ($query->clone()->whereIn('severity', Severity::METRIC_ELIGIBLE)->where('mttr', '>=', 0)->avg('mttr') ?? 0), 2),
+                        'avgMttr' => round((float) ($baseline->clone()->whereIn('severity', Severity::METRIC_ELIGIBLE)->where('mttr', '>=', 0)->avg('mttr') ?? 0), 2),
                         'avgMtbf' => $avgMtbf,
-                        'totalPotentialFundLoss' => (float) $query->sum('potential_fund_loss'),
-                        'totalFundLoss' => (float) $query->sum('fund_loss'),
-                        'totalRecoveredFund' => (float) $query->sum('recovered_fund'),
+                        'totalPotentialFundLoss' => (float) $baseline->sum('potential_fund_loss'),
+                        'totalFundLoss' => (float) $baseline->sum('fund_loss'),
+                        'totalRecoveredFund' => (float) $baseline->sum('recovered_fund'),
                     ];
 
-                    $incidents = $query->clone()->with('labels')->lazy()->collect();
+                    $incidents = $baseline->clone()->with('labels')->lazy()->collect();
 
                     return Excel::download(
-                        new IncidentTableExport($incidents, $stats, $headings, $selectedColumns, $query),
+                        new IncidentTableExport($incidents, $stats, $headings, $selectedColumns, $baseline),
                         'incidents-'.now()->format('Y-m-d').'.'.$format
                     );
                 }),
