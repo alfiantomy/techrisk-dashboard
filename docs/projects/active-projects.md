@@ -45,6 +45,43 @@
 
 ## Active Projects
 
+### [PROJ-017] Notion MCP connection, AI-chat tools, scheduled sub-page sync
+
+**Status:** In Progress (code complete + tests green; live OAuth/sync verification pending)
+**Priority:** P2
+**Start Date:** 2026-10-23
+
+#### Description
+Connect the dashboard to Notion via MCP (Model Context Protocol) against Notion's hosted MCP server (`https://mcp.notion.com/mcp`, streamable HTTP, OAuth 2.1 + PKCE with dynamic client registration — no manual Notion app or API token). Three capabilities share the one workspace-wide connection: (1) four AI-chat tools (search/fetch/create-pages/update-page) exposed through the existing `AgentTool` registry — chat-only by construction since War Room requires explicit `enabled_tools` opt-in and scheduled agents are text-only; (2) a 15-minute scheduler that fetches a configured watch page/database and auto-imports new sub-pages into the **Issue list** (`classification='Issue'`), deduped on Notion page ID (not title) via the `notion_synced_pages` table, mapping fields through `NotionIssueMapper` — logic extracted from `IssuesImporter` so the CSV importer and MCP sync cannot drift (BUG-008 lesson); (3) a Notion Settings admin page (connect/disconnect, watch target, last-sync status) gated on `manage api tokens`. Tokens live encrypted (`Crypt::encryptString`) in `Setting` key `notion_mcp_token`; refresh is lock-guarded with re-read-after-acquire because Notion rotates refresh tokens on use. Supersedes the discarded direct-REST Notion integration.
+
+#### Technical Approach
+- `laravel/mcp` v1.1+ client (`Client::web()` + `withOAuth()` + lazy `withToken()`), registered in `AppServiceProvider`, OAuth routes via `Mcp::oAuthRoutesFor('notion', …)` — **APP_URL must be publicly reachable** for the callback.
+- `app/Services/Notion/` — `NotionMcpClient` (connection/refresh/callTool, never throws toward chat), `NotionIssueMapper` (shared mapping), `NotionIssueSyncService` (sync + dedupe), `Tools/*` (4 `AgentToolInterface` passthroughs).
+- `notion-fetch` response shapes are OAuth-gated from `tools/list` offline — `notion:sync-issues --dry-run` against the live server is the designated shape-verification step; `extractEntries()` is the single adjustment point (may switch to `notion-query-data-source`).
+- Detailed design: `docs/superpowers/specs/2026-10-23-notion-mcp-design.md`
+
+#### Tasks
+- [x] Install `laravel/mcp:^1.1` (v1.1.1; framework upgraded 12.45.1 → 12.70.1), `config/notion.php`, client registration — 2026-10-23
+- [x] `NotionMcpClient` (token store/refresh/disconnect, `callTool`/`callToolDetailed`) + OAuth routes — 2026-10-23
+- [x] 4 chat tool classes + seeding migration + registry-cache clear — 2026-10-23
+- [x] `NotionIssueMapper` extracted from `IssuesImporter` (importer now delegates to it) — 2026-10-23
+- [x] `NotionIssueSyncService` + `notion_synced_pages` table + `notion:sync-issues --dry-run` + 15-min schedule — 2026-10-23
+- [x] Notion Settings Filament page (connect/disconnect/sync-now/watch target) — 2026-10-23
+- [x] Tests: 46 Notion tests + 15 importer tests green; Pint clean — 2026-10-23
+- [ ] Live: connect via Notion Settings page, `--dry-run` to verify `notion-fetch` shape, real sync run — pending (needs deployed APP_URL + Docker)
+- [ ] `php artisan migrate --force` on the real DB at next deploy — pending
+
+#### Dependencies
+- Docker/production deploy for the publicly reachable OAuth callback
+
+#### Blockers
+- Docker (colima) was down during development; migrations not yet run against the real MySQL DB (tests use SQLite in-memory)
+
+#### Progress Updates
+- 2026-10-23: Phases A–D implemented on `feature/notion-mcp`, tests written and passing. Full suite: 907 tests, 7 failures verified pre-existing (6 × Reverb BroadcastException with Docker down + 1 × ChatPersonaParityTest — identical on a clean tree via stash). Flagged pre-existing gap: `IssuesImporter` production path leaves NOT NULL `incident_type`/`incident_source` unset (strict-mode inserts would fail; the sync service sets them explicitly).
+
+---
+
 ### [PROJ-016] Add Action Items button on RCA documents
 
 **Status:** In Progress (iteration 3: AI rewording of drafts)

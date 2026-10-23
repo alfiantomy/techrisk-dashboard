@@ -49,7 +49,10 @@ use App\Http\Controllers\Ai\WarRoomTemplateController;
 use App\Http\Controllers\DownloadDocumentController;
 use App\Http\Controllers\WeeklyReportExportController;
 use App\Livewire\RequestAccessForm;
+use App\Services\Notion\NotionMcpClient;
 use Illuminate\Support\Facades\Route;
+use Laravel\Mcp\Client\OAuth\TokenSet;
+use Laravel\Mcp\Facades\Mcp;
 
 Route::post('/admin/ai/enhance-text', TextEnhanceController::class)
     ->middleware(['auth', 'can:manage incidents', 'ai.available:text,model'])
@@ -291,3 +294,13 @@ Route::get('/docs.postman', function () {
 
     return response()->file($path, ['Content-Type' => 'application/json']);
 })->name('docs.postman');
+
+// Notion MCP account linking (laravel/mcp) — registers mcp.oauth.notion.{connect,callback,client-metadata}.
+// The callback stores the exchanged TokenSet as the workspace-wide connection used by the AI-chat
+// Notion tools and the scheduled sub-page sync. APP_URL must be publicly reachable — Notion
+// redirects the browser back to the callback route.
+Mcp::oAuthRoutesFor('notion', function (string $client, TokenSet $token) {
+    app(NotionMcpClient::class)->storeTokens($token);
+
+    return redirect()->route('notion.settings');
+}, middleware: ['web', 'auth']);

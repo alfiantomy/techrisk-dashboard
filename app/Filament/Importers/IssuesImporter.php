@@ -1,16 +1,15 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Filament\Importers;
 
-use App\Enums\IncidentClassification;
-use App\Helpers\StringHelper;
 use App\Models\Incident;
+use App\Services\Notion\NotionIssueMapper;
 use Filament\Actions\Imports\Exceptions\RowImportFailedException;
 use Filament\Actions\Imports\ImportColumn;
 use Filament\Actions\Imports\Importer;
 use Filament\Actions\Imports\Models\Import;
-use Illuminate\Support\Carbon;
 
 class IssuesImporter extends Importer
 {
@@ -42,14 +41,7 @@ class IssuesImporter extends Importer
             return new Incident;
         }
 
-        // Normalize the incoming title for fuzzy comparison
-        $normalizedTitle = StringHelper::normalizeForComparison($name);
-
-        // Query all issues and filter using fuzzy matching
-        $existing = Incident::where('classification', IncidentClassification::Issue->value)
-            ->get()
-            ->first(fn (Incident $incident) => StringHelper::normalizeForComparison($incident->title) === $normalizedTitle
-            );
+        $existing = NotionIssueMapper::findDuplicateByTitle($name);
 
         if ($existing) {
             // Skip this row with a warning message instead of updating
@@ -65,69 +57,28 @@ class IssuesImporter extends Importer
     public function fillRecord(): void
     {
         // Parse date from "Month DD, YYYY" format (e.g., "January 12, 2026")
-        $dateString = $this->data['Date of Incident'] ?? '';
-        $incidentDate = $this->parseNotionDate($dateString);
+        $incidentDate = NotionIssueMapper::parseNotionDate($this->data['Date of Incident'] ?? '');
 
-        // Use StringHelper to clean the title (removes Notion prefix, trims, etc.)
-        $rawName = $this->data['Name'] ?? '';
-        $cleanTitle = str_replace('Summary of Incident - ', '', $rawName);
+        // Clean the title (removes Notion prefix, etc.)
+        $cleanTitle = NotionIssueMapper::cleanTitle($this->data['Name'] ?? '');
 
         $data = [
             'title' => $cleanTitle,
             'incident_date' => $incidentDate,
             'entry_date_tech_risk' => $incidentDate->format('Y-m-d'),
-            'severity' => $this->mapSeverityToCode($this->data['Root Cause Classification'] ?? 'G'),
+            'severity' => NotionIssueMapper::mapSeverityToCode($this->data['Root Cause Classification'] ?? 'G'),
             'classification' => 'Issue',
             'incident_type_id' => \App\Models\IncidentType::first()?->id,
         ];
 
         // Only generate new ID for new records
         if (! $this->record->exists) {
-            $data['no'] = $this->generateIssueId();
+            $data['no'] = NotionIssueMapper::generateIssueId();
         }
 
         $this->record->fill($data);
 
         // MTTR/MTBF will be auto-calculated by the IncidentObserver
-    }
-
-    private function parseNotionDate(string $dateString): Carbon
-    {
-        // Try parsing "Month DD, YYYY" format from Notion
-        try {
-            return Carbon::createFromFormat('F d, Y', $dateString)->startOfDay();
-        } catch (\Exception $e) {
-            // Fallback to regular parsing
-            return Carbon::parse($dateString);
-        }
-    }
-
-    private function mapSeverityToCode(string $classification): string
-    {
-        // Map Notion classifications to severity codes
-        $mapping = [
-            'Deployment Issues' => 'P1',
-            'Infrastructure Issue' => 'P1',
-            'Code Bug' => 'P2',
-            'Configuration Error' => 'P2',
-            'Data Issue' => 'P3',
-            'UI Issue' => 'P4',
-            'Internal Improving Issue' => 'G',
-        ];
-
-        return $mapping[$classification] ?? 'G'; // Default to G (General)
-    }
-
-    private function generateIssueId(): string
-    {
-        $baseId = date('Ymd').'_IS_';
-        $uniqueId = '';
-        do {
-            $suffix = random_int(1000, 9999);
-            $uniqueId = $baseId.$suffix;
-        } while (Incident::where('no', $uniqueId)->exists());
-
-        return $uniqueId;
     }
 
     public static function getLabel(): string

@@ -51,6 +51,9 @@ Schedule::command('reminders:send-incidents')->dailyAt('08:15');
 Schedule::command('notifications:clean')->dailyAt('02:00');
 // Re-index stale RAG documents — daily at 02:30
 Schedule::command('rag:reindex-stale')->dailyAt('02:30');
+// Import new Notion sub-pages as Issue records — every 15 min
+Schedule::command('notion:sync-issues')->everyFifteenMinutes()->withoutOverlapping()
+    ->description('Import new Notion sub-pages as Issue records (dedupe on Notion page ID)');
 // Purge chat attachment files (originals + .md sidecars) older than 24h — daily at 03:10
 Schedule::call(fn () => app(\App\Services\Ai\ChatAttachmentService::class)->cleanupOldAttachments())
     ->dailyAt('03:10')
