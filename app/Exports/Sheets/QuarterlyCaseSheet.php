@@ -8,6 +8,7 @@ use App\Enums\FundStatus;
 use App\Exports\Concerns\ComputesMtbfSequence;
 use App\Exports\Concerns\IdrFormat;
 use App\Exports\Concerns\QuarterRange;
+use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithColumnFormatting;
@@ -34,10 +35,17 @@ class QuarterlyCaseSheet implements FromQuery, ShouldAutoSize, WithColumnFormatt
 
     private string $title;
 
-    public function __construct($query, string $title)
+    /**
+     * @param  Builder|null  $mtbfScope  full-filtered-set builder the MTBF
+     *                                   sequence runs over — NOT this tab's
+     *                                   own query (report reads as one table;
+     *                                   tab constraints must not shrink gaps).
+     */
+    public function __construct($query, string $title, ?Builder $mtbfScope = null)
     {
         $this->query = $query;
         $this->title = $title;
+        $this->mtbfScope = $mtbfScope;
     }
 
     public function query()

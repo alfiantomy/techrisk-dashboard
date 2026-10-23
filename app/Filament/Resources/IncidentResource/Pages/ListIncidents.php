@@ -121,7 +121,7 @@ class ListIncidents extends ListRecords
                     $incidents = $query->clone()->with('labels')->lazy()->collect();
 
                     return Excel::download(
-                        new IncidentTableExport($incidents, $stats, $headings, $selectedColumns),
+                        new IncidentTableExport($incidents, $stats, $headings, $selectedColumns, $query),
                         'incidents-'.now()->format('Y-m-d').'.'.$format
                     );
                 }),

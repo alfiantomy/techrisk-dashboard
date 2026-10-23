@@ -6,6 +6,7 @@ namespace App\Exports\Concerns;
 
 use App\Enums\IncidentClassification;
 use App\Enums\Severity;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Full-calendar-year MTBF gap sequence (IncidentTableExport semantics —
@@ -16,6 +17,15 @@ trait ComputesMtbfSequence
 {
     /** Per-instance, NOT static — static froze the sequence across requests in long-lived FPM workers (prod bug 2026-09-30). */
     private array $mtbfSequenceCache = [];
+
+    /**
+     * When set, the sequence runs over this already-filtered builder instead
+     * of the whole table, so export f_* filters (e.g. fund status) scope the
+     * gaps — excluded rows telescope over (owner report 2026-10-23: exports
+     * scoped to Confirmed loss + Non fundLoss must reproduce the owner's
+     * hand-made sheet, not the unfiltered chain). Null = legacy global scope.
+     */
+    protected ?Builder $mtbfScope = null;
 
     /**
      * Gap sequence, METRIC_ELIGIBLE only. First of the year has no
@@ -29,7 +39,8 @@ trait ComputesMtbfSequence
         $key = "export_all_{$year}";
 
         if (! isset($this->mtbfSequenceCache[$key])) {
-            $incidents = \App\Models\Incident::whereYear('incident_date', $year)
+            $incidents = ($this->mtbfScope ? $this->mtbfScope->clone() : \App\Models\Incident::query())
+                ->whereYear('incident_date', $year)
                 ->where('classification', '!=', IncidentClassification::Issue->value)
                 ->whereIn('severity', Severity::METRIC_ELIGIBLE)
                 ->withoutOutliers()

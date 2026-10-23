@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Exports;
 
+use App\Enums\FundStatus;
 use App\Exports\Concerns\IdrFormat;
 use App\Exports\QuarterlyReportExport;
 use App\Exports\Sheets\QuarterlyCaseSheet;
@@ -165,6 +166,50 @@ class QuarterlyReportExportTest extends TestCase
         $q1 = $spread->getSheetByName('Q1 2026');
         $this->assertSame(DataType::TYPE_NUMERIC, $q1->getCell('H2')->getDataType());
         $this->assertEqualsWithDelta(146250.0, (float) $q1->getCell('H2')->getValue(), 0.001);
+    }
+
+    public function test_mtbf_sequence_and_footer_follow_fund_status_filter(): void
+    {
+        // Owner report 2026-10-23: an export scoped to Fund Status =
+        // Confirmed loss + Non fundLoss must reproduce the owner's hand-made
+        // sheet (~7,6 for 2026) — the sequence telescopes over the rows the
+        // filter excluded, instead of using the unfiltered chain (~3,8).
+        // 2039 chain: A Jan 10 Confirmed, B Jan 20 Fully recovered (excluded),
+        // E Jan 25 Confirmed, D Jan 28 Non fundLoss, C Jan 30 Confirmed.
+        $make = fn (string $date, array $attrs = []) => Incident::factory()->createQuietly(array_merge([
+            'classification' => 'Incident', 'incident_date' => "{$date} 10:00",
+        ], $attrs));
+
+        $a = $make('2039-01-10', ['severity' => 'P1', 'fund_status' => 'Confirmed loss']);
+        $make('2039-01-20', ['severity' => 'P1', 'fund_status' => 'Fully recovered']);
+        $e = $make('2039-01-25', ['severity' => 'P2', 'fund_status' => 'Confirmed loss']);
+        $d = $make('2039-01-28', ['severity' => 'P1', 'fund_status' => 'Non fundLoss']);
+        $c = $make('2039-01-30', ['severity' => 'P3', 'fund_status' => 'Confirmed loss']);
+
+        $query = ExportActionSchema::applyFilters(Incident::query(), [
+            'f_fund_status' => [FundStatus::ConfirmedLoss->value, FundStatus::NonFundLoss->value],
+        ]);
+        $sheets = (new QuarterlyReportExport($query))->sheets();
+        $titles = array_map(fn ($sheet) => $sheet->title(), $sheets);
+
+        // All Cases: B's row is gone AND its gap contribution — E reads 15
+        // (Jan 10 → Jan 25), not 5.
+        $allCases = $sheets[0];
+        $this->assertSame('-', $allCases->map($a)[2]);
+        $this->assertSame(15, $allCases->map($e)[2], 'gap telescopes over the filtered-out Fully recovered row');
+        $this->assertSame(3, $allCases->map($d)[2]);
+        $this->assertSame(2, $allCases->map($c)[2]);
+
+        // Fund Loss tab (rows A, E, C only): C reads 2 (D still counts in the
+        // sequence) — the full-filtered-set sequence, not a per-tab one (5).
+        $fundLoss = $sheets[array_search('Fund Loss', $titles, true)];
+        $this->assertSame(2, $fundLoss->map($c)[2], 'case tabs share the full-filtered-set sequence, not per-tab gaps');
+
+        // Footer Avg MTBF = mean of the displayed column ('-' drops out):
+        // (15 + 3 + 2) / 3 — reconciles to scoped span/(n-1) = 20/3.
+        $spread = $this->render(new QuarterlyReportExport($query));
+        $data = $spread->getSheetByName('All Cases');
+        $this->assertEqualsWithDelta(20 / 3, (float) $data->getCell('D7')->getValue(), 0.001);
     }
 
     private function export(): QuarterlyReportExport

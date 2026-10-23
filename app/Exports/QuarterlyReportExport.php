@@ -36,15 +36,16 @@ class QuarterlyReportExport implements WithMultipleSheets
             ->unique()->sort()->values()
             ->map(fn (string $quarter) => new QuarterlyCaseSheet(
                 $this->incidentQuery()->whereBetween('incident_date', QuarterRange::dates($quarter)),
-                QuarterRange::label($quarter)
+                QuarterRange::label($quarter),
+                $this->query
             ))
             ->all();
 
         return [
-            new QuarterlyCaseSheet($this->incidentQuery(), 'All Cases'),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('recovered_fund', '>', 0), 'Recovered Cases'),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::ConfirmedLoss->value), 'Fund Loss'),
-            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::NonFundLoss->value), 'Non Fund Loss'),
+            new QuarterlyCaseSheet($this->incidentQuery(), 'All Cases', $this->query),
+            new QuarterlyCaseSheet($this->incidentQuery()->where('recovered_fund', '>', 0), 'Recovered Cases', $this->query),
+            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::ConfirmedLoss->value), 'Fund Loss', $this->query),
+            new QuarterlyCaseSheet($this->incidentQuery()->where('fund_status', FundStatus::NonFundLoss->value), 'Non Fund Loss', $this->query),
             ...$quarterSheets,
         ];
     }

@@ -6,6 +6,7 @@ namespace App\Exports;
 
 use App\Exports\Concerns\ComputesMtbfSequence;
 use App\Exports\Concerns\IdrFormat;
+use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -28,12 +29,19 @@ class IncidentTableExport implements FromCollection, ShouldAutoSize, WithEvents,
 
     protected $columnNames;
 
-    public function __construct($incidents, $stats, $headings, $columnNames)
+    /**
+     * @param  Builder|null  $mtbfScope  the export's filtered query — the MTBF
+     *                                   sequence (column + bottom avg) must
+     *                                   telescope over rows the f_* filters
+     *                                   excluded, not the unfiltered chain.
+     */
+    public function __construct($incidents, $stats, $headings, $columnNames, ?Builder $mtbfScope = null)
     {
         $this->incidents = $incidents;
         $this->stats = $stats;
         $this->headings = $headings;
         $this->columnNames = $columnNames;
+        $this->mtbfScope = $mtbfScope;
     }
 
     public function collection()
