@@ -9,26 +9,30 @@ use App\Enums\Severity;
 use BackedEnum;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 /**
- * Owner rule 2026-10-27 (restyled + MTTR split same day): every
- * incident-listing tab ends with a styled footer block — a severity
- * mini-table (P1..X4, zeros shown, METRIC_ELIGIBLE order) and a stats
- * mini-table. Avg MTTR is SPLIT by the storage convention
- * (IncidentMetricsCalculator, owner 2026-10-13): positive mttr = minutes
- * (non-fund-loss), negative mttr = elapsed days (fund loss) — each bucket
- * averages in its own unit, never mixed. Fund counts describe the tab's
- * own rows, so tab-vs-widget differences read straight off the sheet.
+ * Owner rule 2026-10-27 (restyled twice same day): every incident-listing
+ * tab ends with two single-line banners, each MERGED across the table's
+ * full width — a per-column grid inherits the incident table's column
+ * widths and reads badly (owner: "mengikuti column size dari table incident
+ * jadi tidak enak dilihat dan di baca"). Banner 1: severity counts P1..X4;
+ * banner 2: stats. Avg MTTR is SPLIT by the storage convention
+ * (IncidentMetricsCalculator, owner 2026-10-13): positive mttr = minutes,
+ * negative mttr = elapsed days — each bucket averages in its own unit,
+ * never mixed. Counts describe the tab's own rows, so tab-vs-widget
+ * differences read straight off the sheet.
  */
 trait WritesSeverityFooter
 {
     /**
-     * Writes the 5-row block (severity header/counts, blank, stats
-     * header/values) starting at $row.
+     * Writes the 2 banner rows (severity line, stats line) starting at
+     * $row, each merged A..max(table width, H) so the text never sits in
+     * the table's column grid.
      *
      * @param  Builder|Collection  $source  the tab's own filtered set —
      *                                      never a pre-grouped builder
@@ -40,44 +44,42 @@ trait WritesSeverityFooter
             ? $this->footerStatsFromCollection($source)
             : $this->footerStatsFromQuery($source);
 
-        $sheet->fromArray(Severity::METRIC_ELIGIBLE, null, "A{$row}");
-        $sheet->getStyle("A{$row}:H{$row}")->applyFromArray(self::FOOTER_HEADER_STYLE);
-
-        $counts = array_map(fn (string $s) => $sevCounts[$s] ?? 0, Severity::METRIC_ELIGIBLE);
-        // ponytail: strict=true is load-bearing — fromArray's default loose
-        // compare treats 0 == null and silently drops zero-count cells.
-        $sheet->fromArray($counts, null, 'A'.($row + 1), true);
-        $sheet->getStyle('A'.($row + 1).':H'.($row + 1))->applyFromArray(self::FOOTER_VALUE_STYLE);
-
-        $statsRow = $row + 3;
-        // ponytail: unit-labeled on purpose — the days bucket holds every
+        $sevLine = implode(' | ', array_map(
+            fn (string $s) => $s.': '.($sevCounts[$s] ?? 0),
+            Severity::METRIC_ELIGIBLE,
+        ));
+        // Unit-labeled on purpose — the days bucket holds every
         // day-granularity status (Confirmed loss, Potential recovery, Fully
         // recovered, Non Tech Loss), so a "Fund Loss" label here would
-        // contradict the Confirmed-loss-only count two cells over.
-        $sheet->fromArray(['Avg MTTR (mins)', 'Avg MTTR (days)', 'Fund Loss', 'Non Fund Loss'], null, "A{$statsRow}");
-        $sheet->getStyle("A{$statsRow}:D{$statsRow}")->applyFromArray(self::FOOTER_HEADER_STYLE);
-
-        // '-' when the bucket has no rows on this tab; BUG-021: avg() is a
-        // decimal-string on MySQL — cast before rounding.
-        $sheet->fromArray([
+        // contradict the Confirmed-loss-only count in the same line.
+        // BUG-021: avg() is a decimal-string on MySQL — cast before rounding.
+        $statsLine = sprintf(
+            'Avg MTTR (mins): %s | Avg MTTR (days): %s | Fund Loss: %d | Non Fund Loss: %d',
             $avgMttrMins === null ? '-' : round((float) $avgMttrMins, 2),
             $avgMttrDays === null ? '-' : round((float) $avgMttrDays, 2),
             $fundCounts[FundStatus::ConfirmedLoss->value] ?? 0,
             $fundCounts[FundStatus::NonFundLoss->value] ?? 0,
-        ], null, 'A'.($statsRow + 1), true);
-        $sheet->getStyle('A'.($statsRow + 1).':D'.($statsRow + 1))->applyFromArray(self::FOOTER_VALUE_STYLE);
+        );
+
+        // Banner spans the table's full width (min H so narrow Custom
+        // sheets still fit the ~80-char lines — merged cells clip, they
+        // do not overflow into neighbours).
+        $lastCol = Coordinate::stringFromColumnIndex(max(
+            Coordinate::columnIndexFromString($sheet->getHighestDataColumn()),
+            8,
+        ));
+
+        foreach ([$row => $sevLine, $row + 1 => $statsLine] as $r => $line) {
+            $sheet->mergeCells("A{$r}:{$lastCol}{$r}");
+            $sheet->setCellValue("A{$r}", $line);
+            $sheet->getStyle("A{$r}:{$lastCol}{$r}")->applyFromArray(self::FOOTER_STYLE);
+        }
     }
 
     /** Same visual language as the sheets' yellow summary headers. */
-    private const FOOTER_HEADER_STYLE = [
+    private const FOOTER_STYLE = [
         'font' => ['bold' => true],
         'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FFFFEB9C']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
-        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]],
-    ];
-
-    private const FOOTER_VALUE_STYLE = [
-        'font' => ['bold' => true],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]],
     ];
