@@ -71,6 +71,7 @@ Connect the dashboard to Notion via MCP (Model Context Protocol) against Notion'
 - [x] Tests: 46 Notion tests + 15 importer tests green; Pint clean — 2026-10-23
 - [x] Live verification: OAuth connect on localhost, sync flow reworked to the real `notion-fetch`/`notion-query-data-sources` shapes (commit `6390f56`), real sync imported 100 Issues, re-run 0 (dedupe proven), chat tool round-trip OK — 2026-10-27
 - [x] Migrations ran on the real (local) MySQL DB — 2026-10-27
+- [x] OAuth connect/callback routes gated to `manage api tokens` (was any logged-in user — commit `1733600`); incremental sync via `createdTime` watermark so each run reads only new rows, not the full window (owner request 2026-10-27, live-verified: backfill run then `WHERE createdTime >=` accepted by the server)
 - [ ] Merge `feature/notion-mcp` + deploy (production migrate + Notion connect there)
 
 #### Dependencies

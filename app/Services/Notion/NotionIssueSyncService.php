@@ -14,8 +14,11 @@ use Illuminate\Support\Facades\Log;
 /**
  * Scheduled sync: watches the configured Notion database (Setting
  * "notion_watch_page_id") and imports new entries as Issue records
- * (classification = Issue), deduped by Notion page ID AND normalized title
- * (titles already imported via the CSV importer must not be re-created).
+ * (classification = Issue). Each run reads only rows created at/after the
+ * last processed row (Setting "notion_sync_watermark" — the raw createdTime
+ * string of the newest row already seen), so Notion is never re-scanned in
+ * full. Page-ID AND normalized-title dedupe remain as safety nets (first-run
+ * overlap with the CSV backlog, rows sharing the watermark's second).
  *
  * Live shape (verified 2026-10-27 against mcp.notion.com): `notion-fetch` on
  * a database returns its SCHEMA, not rows — including the queryable
@@ -33,7 +36,9 @@ class NotionIssueSyncService
 
     public const LAST_SYNC_STATUS_KEY = 'notion_last_sync_status';
 
-    /** Newest-first scan window; page-ID dedupe makes re-scanning safe. */
+    public const WATERMARK_KEY = 'notion_sync_watermark';
+
+    /** Per-run cap on new rows; ASC order + watermark picks the rest up next run. */
     protected const SCAN_LIMIT = 200;
 
     public function __construct(private NotionMcpClient $notion) {}
@@ -75,11 +80,18 @@ class NotionIssueSyncService
                 // Column names are this database's properties (same names the
                 // CSV importer maps); date properties use the expanded
                 // `date:<name>:start` column documented in the fetched schema.
+                //
+                // Incremental: only rows created at/after the watermark are
+                // read — `>=` (not >) so a row sharing the watermark's second
+                // is still fetched and page-ID dedupe absorbs the re-read.
+                // ASC + LIMIT means a burst of new rows is drained oldest
+                // first, the remainder next run (DESC could skip middles).
                 'query' => sprintf(
                     'SELECT url, createdTime, "Name", "date:Date of Incident:start" AS date_start, '
                     .'"Classification by Tech Risk Incident" AS classification, "Root Cause Classification" AS root_cause '
-                    .'FROM "%s" ORDER BY createdTime DESC LIMIT %d',
+                    .'FROM "%s" %sORDER BY createdTime ASC LIMIT %d',
                     $collectionUrl,
+                    $this->whereSinceWatermark(),
                     self::SCAN_LIMIT,
                 ),
             ],
@@ -156,7 +168,53 @@ class NotionIssueSyncService
 
         $label = $dryRun ? 'Would import' : 'Imported';
 
+        if (! $dryRun) {
+            $this->advanceWatermark($rows);
+        }
+
         return $this->finish('ok', "{$label} {$created} issue(s); {$skipped} already synced/duplicate/blank.", $created, $skipped, $dryRun, implode("\n", $lines));
+    }
+
+    /**
+     * WHERE clause for the incremental query — empty on the first run (full
+     * backfill), else everything created at/after the last processed row.
+     * The watermark is Notion's own createdTime string, passed through
+     * unmodified so the comparison format always matches the column's.
+     */
+    protected function whereSinceWatermark(): string
+    {
+        // No default argument — Setting::get caches its default via
+        // Cache::remember, and a cached '' would mask a later-set value.
+        $watermark = (string) Setting::get(self::WATERMARK_KEY);
+
+        if (blank($watermark)) {
+            return '';
+        }
+
+        return sprintf("WHERE createdTime >= '%s' ", str_replace("'", "''", $watermark));
+    }
+
+    /**
+     * Move the watermark to the newest row SEEN (created or skipped — both
+     * were handled) only after a fully successful run; a mid-run failure
+     * leaves it, so the next run re-reads and dedupe skips what already
+     * landed.
+     */
+    protected function advanceWatermark(array $rows): void
+    {
+        $newest = '';
+
+        foreach ($rows as $row) {
+            $createdTime = (string) ($row['createdTime'] ?? '');
+
+            if ($createdTime > $newest) {
+                $newest = $createdTime;
+            }
+        }
+
+        if ($newest !== '') {
+            Setting::set(self::WATERMARK_KEY, $newest);
+        }
     }
 
     /**
