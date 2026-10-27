@@ -89,10 +89,19 @@ Static helpers used by **both** the CSV importer and the MCP sync:
 - No War Room / scheduled-agent tool exposure.
 - No live schema sync from `tools/list`; no write-back dashboard → Notion; no sub-page deletion/rename handling; no re-sync of already-imported pages.
 
+## Schema assumptions (2026-10-27, owner decision: keep as is)
+
+The sync is **not schema-agnostic** — it targets Notion databases whose properties match the current "🛟 Summary of Incident 2026 (DB)" template:
+
+- Hard-coded SQL columns in `NotionIssueSyncService::sync()`: `Name`, `date:Date of Incident:start`, `Classification by Tech Risk Incident`, `Root Cause Classification`.
+- Root-cause → severity options in `NotionIssueMapper::mapSeverityToCode()` (Deployment Issues → P1, …; unmapped options fall to `G`).
+- Title prefix `Summary of Incident - ` stripped by `cleanTitle()`.
+- **One watch target at a time** (`notion_watch_page_id` Setting). Swapping to another database with the same template = zero code changes (edit the setting); a different schema fails loudly with the MCP "no such column" error in the sync notification. Auto-detection of properties was offered and declined (2026-10-27) — reconsider only if a differently-shaped database needs syncing.
+
 ## Verification
 
-1. ✅ `php artisan test` — 61 Notion/importer tests green; full suite 907 tests with only 7 failures **verified pre-existing** (6 × Reverb `BroadcastException` + 1 × ChatPersonaParityTest — identical on a clean tree via stash).
-2. ⏳ **Live (needs deployed/tunneled APP_URL + Docker up):** connect via the Notion Settings page → approve in Notion → `php artisan notion:sync-issues --dry-run` against the real watch target. **First dry-run reveals the actual `notion-fetch` response shape** — if `extractEntries()` needs adjustment, that's a one-place change in the sync service (possibly switching to `notion-query-data-source`). Then: real run imports new sub-pages into the Issue list; second run imports nothing; chat "search my Notion for X" works.
+1. ✅ `php artisan test` — 61 Notion/importer tests green; full suite 907 tests with only 7 failures **verified pre-existing** (6 × Reverb `BroadcastException` + 1 × ChatPersonaParityTest — identical on a clean tree via stash). After the live-shape fix (commit `6390f56`): 64 Notion/importer tests green.
+2. ✅ **Live (2026-10-27, local Docker):** OAuth connect via the Notion Settings page works on plain `http://localhost:8000` (no tunnel needed). `notion-fetch` on a database returns its **schema** (incl. the queryable `collection://<uuid>` table), not rows — the sync therefore goes fetch → `notion-query-data-sources` (arguments wrapped in a `data` object). Dry-run listed 100 real entries; the real run imported **100 Issues** (7×P1, 3×P2, 5×P3, 4×P4, 93×G — most rows still carry `-` in the classification column), and an immediate re-run imported 0 (page-ID dedupe proven). Chat tool round-trip (`notion_search` for "hbase") returned live results.
 3. ✅ Pint clean.
 4. ✅ War Room config untouched → Notion tools absent from its definitions.
-5. ⏳ `php artisan migrate --force` on the real DB at deploy time (Docker was down during development; SQLite in-memory used for tests).
+5. ✅ `php artisan migrate --force` ran on the real (local) MySQL DB — both Notion migrations applied.
