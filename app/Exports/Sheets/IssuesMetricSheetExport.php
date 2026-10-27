@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Exports\Sheets;
 
 use App\Enums\IncidentClassification;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -18,6 +19,8 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class IssuesMetricSheetExport implements FromQuery, ShouldAutoSize, WithEvents, WithHeadings, WithMapping, WithTitle
 {
+    use WritesSeverityFooter;
+
     private $query;
 
     private $title;
@@ -155,6 +158,9 @@ class IssuesMetricSheetExport implements FromQuery, ShouldAutoSize, WithEvents, 
                 $sheet->getStyle($summaryRange)->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB('FFE2EFDA');
                 $sheet->getStyle($summaryRange)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
                 $sheet->getStyle($summaryRange)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+                // Severity + MTTR + fund counts below the two-row summary.
+                $this->writeSeverityFooter($sheet, $summaryStartRow + 3, $this->query);
             },
         ];
     }

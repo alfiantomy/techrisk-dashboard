@@ -10,6 +10,7 @@ use App\Enums\IncidentStatus;
 use App\Enums\IncidentType;
 use App\Enums\Severity;
 use App\Exports\Concerns\IdrFormat;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -23,6 +24,8 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents, WithHeadings, WithMapping, WithTitle
 {
+    use WritesSeverityFooter;
+
     private $query;
 
     private $title;
@@ -241,6 +244,9 @@ class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents
 
                 $summaryRange = "A{$summaryHeaderRow}:F{$summaryDataRow}";
                 $sheet->getStyle($summaryRange)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+
+                // Severity + MTTR + fund counts below the summary block.
+                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->query);
             },
         ];
     }

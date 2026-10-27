@@ -6,20 +6,25 @@ namespace App\Exports\Sheets;
 
 use App\Exports\Concerns\IdrFormat;
 use App\Exports\Concerns\QuarterRange;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithColumnFormatting;
+use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use Maatwebsite\Excel\Concerns\WithTitle;
+use Maatwebsite\Excel\Events\AfterSheet;
 
 /**
  * One sheet per group value (division / business category / root cause / PIC).
  * Incidents with multiple values appear in each matching sheet (owner-approved).
  */
-class PerCategorySheet implements FromQuery, ShouldAutoSize, WithColumnFormatting, WithHeadings, WithMapping, WithTitle
+class PerCategorySheet implements FromQuery, ShouldAutoSize, WithColumnFormatting, WithEvents, WithHeadings, WithMapping, WithTitle
 {
+    use WritesSeverityFooter;
+
     protected Builder $baseQuery;
 
     protected string $column;
@@ -99,5 +104,18 @@ class PerCategorySheet implements FromQuery, ShouldAutoSize, WithColumnFormattin
     {
         // I=Potential Loss, J=Actual Loss, K=Recovered (values are float-cast in map())
         return ['I' => IdrFormat::FORMAT, 'J' => IdrFormat::FORMAT, 'K' => IdrFormat::FORMAT];
+    }
+
+    public function registerEvents(): array
+    {
+        return [
+            // Severity + MTTR + fund counts under the rows (owner 2026-10-27) —
+            // this sheet had no footer before; query() re-derives the filtered
+            // builder fresh, never a grouped one.
+            AfterSheet::class => function (AfterSheet $event): void {
+                $sheet = $event->sheet->getDelegate();
+                $this->writeSeverityFooter($sheet, $sheet->getHighestDataRow() + 2, $this->query());
+            },
+        ];
     }
 }

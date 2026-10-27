@@ -8,6 +8,7 @@ use App\Enums\FundStatus;
 use App\Exports\Concerns\ComputesMtbfSequence;
 use App\Exports\Concerns\IdrFormat;
 use App\Exports\Concerns\QuarterRange;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
@@ -30,6 +31,7 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 class QuarterlyCaseSheet implements FromQuery, ShouldAutoSize, WithColumnFormatting, WithEvents, WithHeadings, WithMapping, WithTitle
 {
     use ComputesMtbfSequence;
+    use WritesSeverityFooter;
 
     private $query;
 
@@ -132,6 +134,10 @@ class QuarterlyCaseSheet implements FromQuery, ShouldAutoSize, WithColumnFormatt
                 $footerRow = $lastDataRow + 2;
                 $sheet->fromArray(['Total Cases', $rows->count(), 'Avg MTBF (days)', $avgMtbf], null, "A{$footerRow}");
                 $sheet->getStyle("A{$footerRow}:D{$footerRow}")->getFont()->setBold(true);
+
+                // Severity + MTTR + fund counts below the pinned footer row
+                // (tests pin A6/D7 — these go strictly underneath).
+                $this->writeSeverityFooter($sheet, $footerRow + 1, $this->query);
             },
         ];
     }

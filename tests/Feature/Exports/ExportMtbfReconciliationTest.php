@@ -66,7 +66,7 @@ class ExportMtbfReconciliationTest extends TestCase
         // Bottom Avg MTBF (3rd summary cell of the last row) = mean of the
         // displayed numeric cells: (20 + 25) / 2 = 22.5 — also exactly the
         // widgets' span/(n-1) for this set. Manual averaging now passes.
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(22.5, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -90,7 +90,7 @@ class ExportMtbfReconciliationTest extends TestCase
         $this->assertSame(20, $sheet->getCell('B3')->getValue());
         $this->assertSame(25, $sheet->getCell('B4')->getValue());
 
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(22.5, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -106,7 +106,7 @@ class ExportMtbfReconciliationTest extends TestCase
 
         // One incident = no gap exists: column '-', bottom 0.
         $this->assertSame('-', $sheet->getCell('B2')->getValue());
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(0.0, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -128,7 +128,7 @@ class ExportMtbfReconciliationTest extends TestCase
 
         // Bottom "Average MTBF" value (label col A, value col B, last row) =
         // mean of the displayed numeric cells: (20 + 25) / 2 = 22.5.
-        $this->assertSame(22.5, (float) $sheet->getCell('B'.$sheet->getHighestDataRow())->getValue());
+        $this->assertSame(22.5, (float) $sheet->getCell('B'.($sheet->getHighestDataRow() - 3))->getValue());
     }
 
     public function test_mtbf_sequence_is_not_stale_across_instances(): void
@@ -179,7 +179,7 @@ class ExportMtbfReconciliationTest extends TestCase
 
         // Bottom Avg MTBF follows the scoped column: mean of [20] = 20 —
         // also scoped span/(n-1). (Unfiltered chain would read 10.)
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(20.0, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
 
         // The orchestrator (All Tabs preset) hands each sheet the filtered
@@ -199,7 +199,7 @@ class ExportMtbfReconciliationTest extends TestCase
         $query = Incident::query()->orderBy('incident_date');
         $sheet = $this->store(new SingleIncidentSheetExport($query, 'Fund Loss', ['Title', 'MTTR (mins)'], ['title', 'mttr']), 't-mttr-days.xlsx');
 
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame('-', (string) $sheet->getCell("B{$summaryDataRow}")->getValue());
     }
 }
