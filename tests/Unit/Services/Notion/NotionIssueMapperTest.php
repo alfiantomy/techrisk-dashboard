@@ -54,25 +54,23 @@ class NotionIssueMapperTest extends TestCase
     }
 
     /**
-     * @dataProvider propertyShapes
+     * @dataProvider classificationSeverities
      */
-    public function test_extracts_plain_values_from_notion_property_objects(?string $type, array $prop, mixed $expected): void
+    public function test_maps_classification_column_to_severity(?string $classification, ?string $expected): void
     {
-        $this->assertSame($expected, NotionIssueMapper::propertyValue(['Field' => $prop], 'Field'));
+        $this->assertSame($expected, NotionIssueMapper::mapClassificationToSeverity($classification));
     }
 
-    public static function propertyShapes(): array
+    public static function classificationSeverities(): array
     {
         return [
-            'title' => ['title', ['type' => 'title', 'title' => [['plain_text' => 'DB down']]], 'DB down'],
-            'title legacy text key' => ['title', ['type' => 'title', 'title' => [['text' => ['content' => 'Old shape']]]], 'Old shape'],
-            'rich_text' => ['rich_text', ['type' => 'rich_text', 'rich_text' => [['plain_text' => 'notes']]], 'notes'],
-            'date' => ['date', ['type' => 'date', 'date' => ['start' => 'January 12, 2026']], 'January 12, 2026'],
-            'select' => ['select', ['type' => 'select', 'select' => ['name' => 'Code Bug']], 'Code Bug'],
-            'status' => ['status', ['type' => 'status', 'status' => ['name' => 'Open']], 'Open'],
-            'number' => ['number', ['type' => 'number', 'number' => 3], 3],
-            'missing property' => [null, [], null],
-            'unknown type' => [null, ['type' => 'people', 'people' => []], null],
+            'P1' => ['P1', 'P1'],
+            'X4' => ['X4', 'X4'],
+            'padded' => [' P2 ', 'P2'],
+            'unclassified dash' => ['-', null],
+            'null' => [null, null],
+            'not a severity' => ['Deployment Issues', null],
+            'trailing digit out of range' => ['P5', null],
         ];
     }
 }

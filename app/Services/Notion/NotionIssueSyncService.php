@@ -12,14 +12,18 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Scheduled sync: watches the configured Notion page/database (Setting
- * "notion_watch_page_id") and imports new sub-pages as Issue records
- * (classification = Issue), deduped by Notion page ID.
+ * Scheduled sync: watches the configured Notion database (Setting
+ * "notion_watch_page_id") and imports new entries as Issue records
+ * (classification = Issue), deduped by Notion page ID AND normalized title
+ * (titles already imported via the CSV importer must not be re-created).
  *
- * Entry/property shapes come from Notion's hosted MCP server and were not
- * fully verifiable offline — `notion:sync-issues --dry-run` prints what the
- * server actually returns so the extraction can be adjusted in one place
- * (extractEntries()/propertyValue()).
+ * Live shape (verified 2026-10-27 against mcp.notion.com): `notion-fetch` on
+ * a database returns its SCHEMA, not rows — including the queryable
+ * `collection://<uuid>` table name. Rows come from `notion-query-data-sources`
+ * with the arguments wrapped in a `data` object:
+ *   {"data": {"data_source_urls": ["collection://..."], "query": "SELECT ..."}}
+ * returning {"results": [{url, createdTime, Name, "date:Date of Incident:start",
+ * "Classification by Tech Risk Incident", "Root Cause Classification"}, ...]}.
  */
 class NotionIssueSyncService
 {
@@ -28,6 +32,9 @@ class NotionIssueSyncService
     public const LAST_SYNC_AT_KEY = 'notion_last_sync_at';
 
     public const LAST_SYNC_STATUS_KEY = 'notion_last_sync_status';
+
+    /** Newest-first scan window; page-ID dedupe makes re-scanning safe. */
+    protected const SCAN_LIMIT = 200;
 
     public function __construct(private NotionMcpClient $notion) {}
 
@@ -46,54 +53,79 @@ class NotionIssueSyncService
             return $this->finish('failed', 'Notion is not connected — connect it on the Notion Settings page.', 0, 0, $dryRun);
         }
 
-        $response = $this->notion->callToolDetailed('notion-fetch', ['id' => $targetId]);
+        $fetch = $this->notion->callToolDetailed('notion-fetch', ['id' => $targetId]);
 
-        if ($response === null) {
+        if ($fetch === null) {
             return $this->finish('failed', 'Notion fetch failed — check the logs.', 0, 0, $dryRun);
         }
 
-        $entries = $this->extractEntries($response['structured'], $response['text']);
+        if ($fetch['isError']) {
+            return $this->finish('failed', 'Notion fetch failed: '.$fetch['text'], 0, 0, $dryRun, $fetch['text']);
+        }
 
-        if ($entries === []) {
-            return $this->finish('failed', 'Could not read entries from the Notion fetch response — see the preview for the raw shape.', 0, 0, $dryRun, $response['text'] ?: null);
+        $collectionUrl = $this->extractCollectionUrl($fetch['text']);
+
+        if ($collectionUrl === null) {
+            return $this->finish('failed', 'Watch target is not a Notion database — set the database page ID on the Notion Settings page.', 0, 0, $dryRun, $fetch['text']);
+        }
+
+        $query = $this->notion->callToolDetailed('notion-query-data-sources', [
+            'data' => [
+                'data_source_urls' => [$collectionUrl],
+                // Column names are this database's properties (same names the
+                // CSV importer maps); date properties use the expanded
+                // `date:<name>:start` column documented in the fetched schema.
+                'query' => sprintf(
+                    'SELECT url, createdTime, "Name", "date:Date of Incident:start" AS date_start, '
+                    .'"Classification by Tech Risk Incident" AS classification, "Root Cause Classification" AS root_cause '
+                    .'FROM "%s" ORDER BY createdTime DESC LIMIT %d',
+                    $collectionUrl,
+                    self::SCAN_LIMIT,
+                ),
+            ],
+        ]);
+
+        if ($query === null) {
+            return $this->finish('failed', 'Notion data-source query failed — check the logs.', 0, 0, $dryRun);
+        }
+
+        if ($query['isError']) {
+            return $this->finish('failed', 'Notion data-source query failed: '.$query['text'], 0, 0, $dryRun, $query['text']);
+        }
+
+        $rows = $this->extractRows($query['text']);
+
+        if ($rows === null) {
+            return $this->finish('failed', 'Could not read rows from the Notion query response — see the preview for the raw shape.', 0, 0, $dryRun, $query['text']);
         }
 
         $created = 0;
         $skipped = 0;
         $lines = [];
 
-        foreach ($entries as $entry) {
-            $pageId = $entry['id'] ?? $entry['page_id'] ?? null;
+        foreach ($rows as $row) {
+            $pageId = $this->pageIdFromUrl((string) ($row['url'] ?? ''));
 
-            if (blank($pageId) || NotionSyncedPage::where('page_id', $pageId)->exists()) {
+            if ($pageId === null || NotionSyncedPage::where('page_id', $pageId)->exists()) {
                 $skipped++;
 
                 continue;
             }
 
-            $title = NotionIssueMapper::propertyValue($entry['properties'] ?? [], 'Name')
-                ?? $entry['title'] ?? null;
+            $title = $row['Name'] ?? null;
 
-            if (blank($title)) {
+            if (blank($title) || NotionIssueMapper::findDuplicateByTitle((string) $title) !== null) {
                 $skipped++;
 
                 continue;
             }
 
-            $dateValue = NotionIssueMapper::propertyValue($entry['properties'] ?? [], 'Date of Incident')
-                ?? $entry['created_time'] ?? null;
+            $incidentDate = $this->parseDate($row['date_start'] ?? null, $row['createdTime'] ?? null);
 
-            try {
-                $incidentDate = $dateValue
-                    ? NotionIssueMapper::parseNotionDate((string) $dateValue)
-                    : Carbon::now()->startOfDay();
-            } catch (\Throwable) {
-                $incidentDate = Carbon::now()->startOfDay();
-            }
-
-            $severity = NotionIssueMapper::mapSeverityToCode(
-                (string) (NotionIssueMapper::propertyValue($entry['properties'] ?? [], 'Root Cause Classification') ?? 'G'),
-            );
+            // The database's own severity column wins; the root-cause map is
+            // the fallback for rows where nobody classified it yet.
+            $severity = NotionIssueMapper::mapClassificationToSeverity($row['classification'] ?? null)
+                ?? NotionIssueMapper::mapSeverityToCode((string) ($row['root_cause'] ?? 'G'));
 
             $lines[] = "- {$title} ({$incidentDate->toDateString()}, {$severity})";
 
@@ -124,40 +156,50 @@ class NotionIssueSyncService
 
         $label = $dryRun ? 'Would import' : 'Imported';
 
-        return $this->finish('ok', "{$label} {$created} issue(s); {$skipped} already synced/blank.", $created, $skipped, $dryRun, implode("\n", $lines));
+        return $this->finish('ok', "{$label} {$created} issue(s); {$skipped} already synced/duplicate/blank.", $created, $skipped, $dryRun, implode("\n", $lines));
     }
 
     /**
-     * Pull page-like entries out of a notion-fetch response. Adjust HERE (one
-     * place) once the live response shape is known — see --dry-run.
-     *
-     * @param  array<string, mixed>|null  $structured
-     * @return list<array<string, mixed>>
+     * The queryable table name, from the fetched data-source document
+     * (`<data-source url="{{collection://uuid}}">` / `"url":"collection://uuid"`).
      */
-    protected function extractEntries(?array $structured, string $text): array
+    protected function extractCollectionUrl(string $text): ?string
     {
-        $data = $structured;
+        return preg_match('/collection:\/\/[0-9a-f-]{36}/i', $text, $m) ? $m[0] : null;
+    }
 
-        if ($data === null && preg_match('/^\s*[\[{]/', $text)) {
-            $data = json_decode($text, true);
+    /**
+     * @return list<array<string, mixed>>|null null when the response is not parseable JSON
+     */
+    protected function extractRows(string $text): ?array
+    {
+        $decoded = json_decode($text, true);
+
+        if (! is_array($decoded) || ! is_array($decoded['results'] ?? null)) {
+            return null;
         }
 
-        if (! is_array($data)) {
-            return [];
-        }
+        return array_values(array_filter($decoded['results'], fn ($row) => is_array($row)));
+    }
 
-        foreach (['results', 'entries', 'pages', 'items', 'data'] as $key) {
-            if (is_array($data[$key] ?? null)) {
-                $data = $data[$key];
+    /** The trailing 32-hex ID of a Notion page URL. */
+    protected function pageIdFromUrl(string $url): ?string
+    {
+        return preg_match('/([a-f0-9]{32})/i', $url, $m) ? $m[1] : null;
+    }
 
-                break;
+    protected function parseDate(mixed $dateStart, mixed $createdTime): Carbon
+    {
+        foreach ([$dateStart, $createdTime] as $candidate) {
+            if (filled($candidate)) {
+                try {
+                    return Carbon::parse((string) $candidate)->startOfDay();
+                } catch (\Throwable) {
+                }
             }
         }
 
-        return array_values(array_filter(
-            is_array($data) && array_is_list($data) ? $data : [],
-            fn ($entry) => is_array($entry) && filled($entry['id'] ?? $entry['page_id'] ?? null),
-        ));
+        return Carbon::now()->startOfDay();
     }
 
     protected function finish(string $status, string $message, int $created, int $skipped, bool $dryRun, ?string $preview = null): array

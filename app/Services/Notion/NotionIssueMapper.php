@@ -49,6 +49,16 @@ class NotionIssueMapper
         return $mapping[$classification] ?? 'G';
     }
 
+    /**
+     * Severity straight from the database's own "Classification by Tech Risk
+     * Incident" column (P1–P4 / X1–X4); null when unclassified ("-"/blank/other)
+     * so the caller can fall back to mapSeverityToCode().
+     */
+    public static function mapClassificationToSeverity(?string $classification): ?string
+    {
+        return $classification !== null && preg_match('/^[PX][1-4]$/', trim($classification)) ? trim($classification) : null;
+    }
+
     /** Generate a unique issue record number (Ymd_IS_xxxx). */
     public static function generateIssueId(): string
     {
@@ -69,28 +79,5 @@ class NotionIssueMapper
         return Incident::where('classification', IncidentClassification::Issue->value)
             ->get()
             ->first(fn (Incident $incident) => StringHelper::normalizeForComparison((string) $incident->title) === $normalizedTitle);
-    }
-
-    /**
-     * Pull a plain value out of a Notion API/MCP property object
-     * ({"Title": {"type": "title", "title": [{"plain_text": ...}]}, ...}).
-     */
-    public static function propertyValue(array $properties, string $name): mixed
-    {
-        $prop = $properties[$name] ?? null;
-
-        if (! is_array($prop)) {
-            return $prop ?? null;
-        }
-
-        return match ($prop['type'] ?? null) {
-            'title' => $prop['title'][0]['plain_text'] ?? ($prop['title'][0]['text']['content'] ?? null),
-            'rich_text' => $prop['rich_text'][0]['plain_text'] ?? null,
-            'date' => $prop['date']['start'] ?? null,
-            'select', 'status' => $prop[$prop['type']]['name'] ?? null,
-            'number' => $prop['number'],
-            'url', 'email', 'phone_number' => $prop[$prop['type']] ?? null,
-            default => null,
-        };
     }
 }
