@@ -12,9 +12,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ponytail: explicit short FK names — MySQL caps identifiers at 64
+        // chars and the auto-generated ones (72 for the keys table) blow it;
+        // SQLite (tests) never enforces the limit, prod MySQL does.
         Schema::create('action_improvement_evidence', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('action_improvement_id')->constrained('action_improvements')->onDelete('cascade');
+            $table->foreignId('action_improvement_id')
+                ->constrained('action_improvements', 'id', 'aie_action_improvement_id_foreign')
+                ->onDelete('cascade');
             $table->string('file_path');
             $table->string('original_filename');
             $table->timestamps();
@@ -22,7 +27,9 @@ return new class extends Migration
 
         Schema::create('action_improvement_evidence_keys', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('action_improvement_evidence_id')->constrained('action_improvement_evidence')->onDelete('cascade');
+            $table->foreignId('action_improvement_evidence_id')
+                ->constrained('action_improvement_evidence', 'id', 'aie_keys_evidence_id_foreign')
+                ->onDelete('cascade');
             $table->text('key');
             $table->string('salt');
             $table->string('method');
