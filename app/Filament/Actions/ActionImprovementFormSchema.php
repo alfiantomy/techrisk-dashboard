@@ -73,6 +73,8 @@ class ActionImprovementFormSchema
                     ActionImprovement::STATUS_PENDING => 'Pending',
                     ActionImprovement::STATUS_DONE => 'Done',
                     ActionImprovement::STATUS_CANCELLED => 'Cancelled (not applicable)',
+                    // Status parking state — distinct from due_date = null ("TBD" date).
+                    ActionImprovement::STATUS_TBD => 'TBD (to be discussed)',
                 ])
                 ->default(ActionImprovement::STATUS_PENDING)
                 ->required()
@@ -81,6 +83,15 @@ class ActionImprovementFormSchema
                 ->label('Result note')
                 ->helperText('What was done / why it is safe to close.')
                 ->visible(fn (Forms\Get $get): bool => $get('status') === ActionImprovement::STATUS_DONE)
+                ->columnSpanFull(),
+            // Cancel reason is mandatory (owner 2026-10-26): hidden Filament
+            // fields are not validated, so required() only bites when the
+            // field is visible — same mechanism as result_note above.
+            Forms\Components\Textarea::make('cancellation_reason')
+                ->label('Cancellation reason')
+                ->helperText('Why this action is not applicable.')
+                ->visible(fn (Forms\Get $get): bool => $get('status') === ActionImprovement::STATUS_CANCELLED)
+                ->required()
                 ->columnSpanFull(),
         ];
     }
@@ -136,6 +147,7 @@ class ActionImprovementFormSchema
             ActionImprovement::STATUS_DONE => 'success',
             ActionImprovement::STATUS_PENDING => 'warning',
             ActionImprovement::STATUS_CANCELLED => 'danger',
+            ActionImprovement::STATUS_TBD => 'gray', // parked, like draft
             default => 'gray', // draft
         };
     }

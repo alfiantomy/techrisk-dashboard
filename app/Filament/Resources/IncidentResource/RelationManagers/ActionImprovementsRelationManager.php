@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Filament\Resources\IncidentResource\RelationManagers;
 
 use App\Filament\Actions\ActionImprovementFormSchema;
+use App\Filament\Resources\ActionImprovementResource\Pages\EditActionImprovement;
 use App\Models\ActionImprovement;
 use App\Models\User;
 use App\Notifications\ActionImprovementReminder;
@@ -89,6 +90,7 @@ class ActionImprovementsRelationManager extends RelationManager
                         ActionImprovement::STATUS_PENDING => 'Pending',
                         ActionImprovement::STATUS_DONE => 'Done',
                         ActionImprovement::STATUS_CANCELLED => 'Cancelled',
+                        ActionImprovement::STATUS_TBD => 'TBD (to be discussed)',
                     ]),
                 SelectFilter::make('priority')
                     ->options(array_combine(ActionImprovement::PRIORITIES, array_map('ucfirst', ActionImprovement::PRIORITIES))),
@@ -162,6 +164,15 @@ class ActionImprovementsRelationManager extends RelationManager
                             ->send();
                     }),
                 ActionImprovementFormSchema::rewordAction(),
+                // Evidence files live on the global EditActionImprovement
+                // page — Filament 3 cannot nest a relation manager inside
+                // this one, so this jumps straight to its Evidence tab.
+                Tables\Actions\Action::make('evidence')
+                    ->label('Evidence')
+                    ->icon('heroicon-o-paper-clip')
+                    ->color('gray')
+                    ->url(fn ($record): string => EditActionImprovement::getUrl(['record' => $record]))
+                    ->visible(fn (): bool => (bool) auth()->user()?->can('manage incidents')),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])

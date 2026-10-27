@@ -139,6 +139,11 @@ class ActionImprovementLifecycleTest extends TestCase
             (new StoreActionImprovementRequest)->rules());
         $this->assertFalse($valid->fails());
 
+        // tbd (parking status, owner 2026-10-26) passes with a nullable reason.
+        $tbd = Validator::make($base + ['status' => 'tbd', 'cancellation_reason' => null],
+            (new StoreActionImprovementRequest)->rules());
+        $this->assertFalse($tbd->fails());
+
         $invalid = Validator::make($base + ['status' => 'delayed', 'priority' => 'urgent'],
             (new StoreActionImprovementRequest)->rules());
         $this->assertTrue($invalid->fails());

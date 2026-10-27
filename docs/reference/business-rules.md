@@ -20,12 +20,16 @@ A Label `Outlier` tag removes the row from every MTBF/MTTR *average* (calculator
 
 ## Action Improvements lifecycle (PROJ-014, owner 2026-10-14)
 
-- Statuses draft/pending/done/cancelled; priority optional, default low.
-- Reminder emails, escalation and every "overdue" count gate on `status = 'pending'` only — draft and cancelled rows drop out automatically.
+- Statuses draft/pending/done/cancelled/tbd; priority optional, default low.
+- Reminder emails, escalation and every "overdue" count gate on `status = 'pending'` only — draft, tbd and cancelled rows drop out automatically (tbd was verified free of charge: every gate already selects `status = 'pending'`, no gating code changed).
+- Cancelling requires a `cancellation_reason` — enforced in the shared form only (`visible` + `required` when status = cancelled, the `result_note`/done mechanism: hidden Filament fields aren't validated). Deliberately NO observer validation, matching the `result_note` precedent; the write API routes stay disabled so the form is the only write path.
+- Evidence: encrypted proof files (jpg/jpeg/png/webp/txt/pdf, ≤15MB) attachable anytime, one key per file (`ActionImprovementEvidenceKey`), ciphertext only on disk (`action-evidence/{uuid}.encrypted`). Evidence is immutable — no edit, delete + re-upload. File events `file_uploaded`/`file_deleted`/`file_downloaded` audit on the parent **Incident** (supporting-doc precedent), not on the evidence row; downloads gate through `ActionImprovementPolicy` view.
 - Transition INTO done stamps `completed_at`/`completed_by` in the observer (`??=` — editing a done row never re-stamps); reopening clears both.
 - `registerCompletenessPct()` counts action-item EXISTENCE by design — a cancelled item still satisfies register completeness (no governance-number drift).
 - The AI Suggest button only ever creates **draft** rows; drafts become real actions by promoting status to Pending.
 - **TBD due dates (owner 2026-10-14):** `due_date = null` means TBD — every draft-creation path (AI Suggest, RCA parser/AI extractor, WarRoom retro) stores TBD when no real date is known, never an invented +30d; tables render `TBD`, and TBD rows are never due-soon/overdue/escalated (SQL null semantics, no code added). TBD rows are **tracked, not lost**: `tbd` filter on both tables, warning color on pending TBD, and the widget Pending card shows "N TBD (no due date)" — reminders skip them by design, so these surfaces are the only chase mechanism.
+
+**Status `tbd` ≠ due-date TBD (naming hazard, owner 2026-10-26).** "TBD" already meant *no due date decided* (`due_date = null`); the 5th status `tbd` means something else entirely: *"TBD (to be discussed)"* — no decision yet on **whether/how** to do the action at all. A row can be either, both or neither independently (a `pending` row with a TBD date is chased; a `tbd`-status row with a real date is parked). Status `tbd` is parked exactly like draft/cancelled: gray badge, excluded from every pending gate (reminders, escalation, overdue, widget counts), and surfaces only via the status filter. All code and UI copy must keep the two distinct — constant `STATUS_TBD`, label "TBD (to be discussed)", never reuse the due-date "TBD" wording for the status.
 
 ## Cache keys that gate freshness
 
