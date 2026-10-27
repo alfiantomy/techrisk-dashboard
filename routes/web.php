@@ -297,10 +297,12 @@ Route::get('/docs.postman', function () {
 
 // Notion MCP account linking (laravel/mcp) — registers mcp.oauth.notion.{connect,callback,client-metadata}.
 // The callback stores the exchanged TokenSet as the workspace-wide connection used by the AI-chat
-// Notion tools and the scheduled sub-page sync. APP_URL must be publicly reachable — Notion
-// redirects the browser back to the callback route.
+// Notion tools and the scheduled sub-page sync. Admin-only via `can:` — a non-admin running this
+// flow would silently repoint the workspace-wide token at their own Notion. client-metadata stays
+// public (RFC 7591 discovery). APP_URL must be publicly reachable — Notion redirects the browser
+// back to the callback route.
 Mcp::oAuthRoutesFor('notion', function (string $client, TokenSet $token) {
     app(NotionMcpClient::class)->storeTokens($token);
 
     return redirect()->route('notion.settings');
-}, middleware: ['web', 'auth']);
+}, middleware: ['web', 'auth', 'can:manage api tokens']);
