@@ -188,17 +188,19 @@ class ExportActionSchema
     }
 
     /**
-     * The widgets' MTBF scope (owner rule 2026-10-23): Confirmed loss +
-     * Non fundLoss only — the same rows the dashboard MTBF cards count.
-     * Strict on purpose: a null fund_status counts in no widget number,
-     * so it counts in no baseline number either.
+     * The widgets' total-tile scope (owner rule 2026-10-23, amended
+     * 2026-10-27): delegate to Incident::excludedFromCounts() — the exact
+     * predicate the dashboard tile counts (null or not-excluded fund
+     * status; prod had one null row dropping every export to 38 vs the
+     * widget's 39). Delegating (not re-encoding the list) keeps the two
+     * surfaces from ever drifting apart again. An explicit f_fund_status
+     * pick bypasses this and stays strict.
      */
     public static function widgetFundScope(Builder $query): Builder
     {
-        return $query->whereIn('fund_status', [
-            FundStatus::ConfirmedLoss->value,
-            FundStatus::NonFundLoss->value,
-        ]);
+        $query->excludedFromCounts();
+
+        return $query;
     }
 
     /**

@@ -12,12 +12,15 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Owner rule 2026-10-23: the export baseline set is widget-aligned —
- * Confirmed loss + Non fundLoss only, the same rows the dashboard MTBF
- * cards count. All Cases / Completed (All Tabs), the Quarterly Report's
- * All Cases + quarter tabs, Custom and Executive data run on it by
- * default; an explicit Fund Status filter overrides the default; the
- * dedicated fund-status tabs keep every fund status (nothing is lost).
+ * Owner rule 2026-10-23 (amended 2026-10-27): the export baseline set is
+ * widget-aligned — Confirmed loss + Non fundLoss + null, the same rows
+ * the dashboard total tile counts (Incident::excludedFromCounts counts a
+ * null fund_status; prod had one such row silently dropping every export
+ * one case below the widget). All Cases / Completed (All Tabs), the
+ * Quarterly Report's All Cases + quarter tabs, Custom and Executive data
+ * run on it by default; an explicit Fund Status filter overrides the
+ * default and stays strict (null excluded); the dedicated fund-status
+ * tabs keep every fund status (nothing is lost).
  */
 class ExportWidgetBaselineTest extends TestCase
 {
@@ -82,6 +85,36 @@ class ExportWidgetBaselineTest extends TestCase
         $this->assertSame($this->c->id, $baseline->first()->id);
     }
 
+    public function test_null_fund_status_row_is_in_the_default_baseline(): void
+    {
+        // The prod 39th case: metric-eligible Incident whose fund_status is
+        // empty — counted by the widget tile, must export too.
+        $null = Incident::factory()->createQuietly([
+            'classification' => 'Incident', 'incident_status' => 'Completed', 'incident_type' => 'Tech',
+            'incident_date' => '2033-01-15 10:00', 'severity' => 'P1', 'fund_status' => null,
+        ]);
+
+        $ids = $this->baseline()->pluck('id');
+
+        $this->assertTrue($ids->contains($null->id));
+        $this->assertSame(3, $this->baseline()->count());
+    }
+
+    public function test_explicit_fund_status_filter_still_excludes_null(): void
+    {
+        $null = Incident::factory()->createQuietly([
+            'classification' => 'Incident', 'incident_status' => 'Completed', 'incident_type' => 'Tech',
+            'incident_date' => '2033-01-15 10:00', 'severity' => 'P1', 'fund_status' => null,
+        ]);
+
+        $query = ExportActionSchema::applyFilters(Incident::query(), ['f_fund_status' => ['Confirmed loss']]);
+        $baseline = ExportActionSchema::baselineQuery($query, ['f_fund_status' => ['Confirmed loss']]);
+
+        $ids = $baseline->pluck('id');
+        $this->assertTrue($ids->contains($this->a->id));
+        $this->assertFalse($ids->contains($null->id));
+    }
+
     public function test_all_tabs_general_sheets_are_scoped_dedicated_keep_their_rows(): void
     {
         $sheets = (new MultiSheetIncidentsExport($this->baseline(), ['Title', 'MTBF (days)'], ['title', 'mtbf'], Incident::query()->whereIn('severity', ['P1', 'P2'])))->sheets();
@@ -132,5 +165,22 @@ class ExportWidgetBaselineTest extends TestCase
 
         // Scoped sequence: C telescopes over the excluded B row.
         $this->assertSame(20, $sheets[0]->map($this->c)[2]);
+    }
+
+    public function test_quarterly_all_cases_sheet_carries_a_null_fund_row(): void
+    {
+        // The prod 39th case at sheet level, not just baselineQuery level —
+        // the export the owner ran must show the null-fund row in All Cases.
+        $null = Incident::factory()->createQuietly([
+            'classification' => 'Incident', 'incident_status' => 'Completed', 'incident_type' => 'Tech',
+            'incident_date' => '2033-01-15 10:00', 'severity' => 'P1', 'fund_status' => null,
+        ]);
+
+        $sheets = (new QuarterlyReportExport($this->baseline(), Incident::query()->whereIn('severity', ['P1', 'P2'])))->sheets();
+        $allCases = $sheets[0];
+
+        $this->assertSame('All Cases', $allCases->title());
+        $this->assertSame(3, $allCases->query()->count());
+        $this->assertTrue($allCases->query()->pluck('id')->contains($null->id));
     }
 }
