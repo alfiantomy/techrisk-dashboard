@@ -52,6 +52,17 @@ class User extends Authenticatable implements Auditable, FilamentUser
     }
 
     /**
+     * Single source for the dashboard-widgets gate: the read-only
+     * `view dashboard widgets` permission OR the historical `manage incidents`
+     * access. Dashboard page, PanelHome and RiskHeatMatrixWidget must all
+     * agree — change the rule here only.
+     */
+    public function canViewDashboardWidgets(): bool
+    {
+        return $this->can('manage incidents') || $this->can('view dashboard widgets');
+    }
+
+    /**
      * Check if user's access has expired.
      */
     public function isAccessExpired(): bool

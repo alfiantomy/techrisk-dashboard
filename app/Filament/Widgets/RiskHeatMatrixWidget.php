@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Filament\Widgets;
 
 use App\Enums\IncidentClassification;
@@ -191,6 +192,6 @@ class RiskHeatMatrixWidget extends Widget
 
     public static function canView(): bool
     {
-        return auth()->user()?->can('manage incidents') ?? false;
+        return auth()->user()?->canViewDashboardWidgets() ?? false;
     }
 }

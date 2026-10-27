@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+
 namespace App\Filament\Pages;
 
 use App\Filament\Widgets\ActionImprovementsOverview;
@@ -23,7 +24,7 @@ class Dashboard extends BaseDashboard
 {
     public static function canAccess(): bool
     {
-        return auth()->user()?->can('manage incidents') ?? false;
+        return auth()->user()?->canViewDashboardWidgets() ?? false;
     }
 
     public function getColumns(): int|string|array
