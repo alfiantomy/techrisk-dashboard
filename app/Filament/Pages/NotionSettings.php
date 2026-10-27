@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Pages;
 
+use App\Filament\Actions\NotionSyncAction;
 use App\Models\Setting;
 use App\Services\Notion\NotionIssueSyncService;
 use App\Services\Notion\NotionMcpClient;
@@ -115,25 +116,7 @@ class NotionSettings extends Page implements HasForms
                             FormAction::make('syncNow')
                                 ->label('Sync now')
                                 ->icon('heroicon-m-arrow-path')
-                                ->action(function (): void {
-                                    $result = app(NotionIssueSyncService::class)->sync();
-
-                                    if ($result['status'] === 'ok') {
-                                        Notification::make()->success()->title($result['message'])->send();
-
-                                        return;
-                                    }
-
-                                    // The preview (raw Notion response) is the
-                                    // diagnostic the message refers to — show it.
-                                    $body = $result['message'];
-
-                                    if (filled($result['preview'])) {
-                                        $body .= "\n\n".$this->previewExcerpt($result['preview']);
-                                    }
-
-                                    Notification::make()->danger()->title('Sync failed')->body($body)->persistent()->send();
-                                }),
+                                ->action(fn () => NotionSyncAction::run()),
                         ])->columnSpanFull(),
                     ]),
 
@@ -171,11 +154,5 @@ class NotionSettings extends Page implements HasForms
         }
 
         return $value;
-    }
-
-    /** Start of the raw Notion response, for the failure notification body. */
-    private function previewExcerpt(string $preview): string
-    {
-        return strlen($preview) > 1500 ? substr($preview, 0, 1500).'…' : $preview;
     }
 }

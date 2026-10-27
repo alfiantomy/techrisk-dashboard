@@ -76,6 +76,8 @@ Static helpers used by **both** the CSV importer and the MCP sync:
 
 `app/Filament/Pages/NotionSettings.php` (System group, gated on `manage api tokens`): connection status + expiry, Connect button (→ `mcp.oauth.notion.connect`), Disconnect, last-sync status, watch page ID field (accepts a URL — the bare 32-hex ID is extracted).
 
+**Manual sync also lives on the Issue list** (owner request 2026-10-27): `ListIssues` header actions render left→right as "Sync with Notion" | Import | "New Issue"; the button is gated on `manage api tokens` (the connection is a workspace-wide admin resource — `manage issues` deliberately does NOT unlock it). Both it and the settings page's "Sync now" run through `app/Filament/Actions/NotionSyncAction::run()` — one home for the sync + success/failure notification (the failure preview was once added to one surface only).
+
 ## Tests
 
 - `tests/Unit/Services/Notion/NotionMcpClientTest.php` — 9 tests: not-connected default, store + encrypt-at-rest (raw row must not contain the token), disconnect, friendly not-connected message, tool passthrough, isError mapping, transport-exception survival, expired-token refresh (lock + rotation-safe re-read), stale token without refresh token, unreadable ciphertext → disconnected.
