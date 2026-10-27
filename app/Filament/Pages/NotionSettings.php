@@ -70,7 +70,7 @@ class NotionSettings extends Page implements HasForms
         $at = Setting::get(NotionIssueSyncService::LAST_SYNC_AT_KEY);
 
         if (blank($at)) {
-            return 'Not synced yet — the scheduler runs every 15 minutes once connected.';
+            return 'Not synced yet — the scheduler runs at 09:00, 12:00, 15:00, and 18:00 (WIB) once connected.';
         }
 
         return sprintf('%s — %s', \Illuminate\Support\Carbon::parse($at)->format('Y-m-d H:i'), Setting::get(NotionIssueSyncService::LAST_SYNC_STATUS_KEY, ''));
@@ -138,7 +138,7 @@ class NotionSettings extends Page implements HasForms
                     ]),
 
                 Section::make('Sub-page Sync')
-                    ->description('The scheduler reads this Notion page/database every 15 minutes; new sub-pages are imported as Issues (dedupe on Notion page ID).')
+                    ->description('The scheduler reads this Notion page/database at 09:00, 12:00, 15:00, and 18:00 (WIB); new sub-pages are imported as Issues (dedupe on Notion page ID).')
                     ->schema([
                         TextInput::make('watch_page_id')
                             ->label('Notion page or database ID')
