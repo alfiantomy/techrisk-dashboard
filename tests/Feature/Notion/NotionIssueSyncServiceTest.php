@@ -60,8 +60,90 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame('2026-01-12', $incident->entry_date_tech_risk->toDateString());
 
         $this->assertTrue(NotionSyncedPage::where('page_id', '4062556e44dd81c395b0c542f2599858')->where('incident_id', $incident->id)->exists());
+        $this->assertSame('2026-01-12 00:00:00Z', NotionSyncedPage::where('incident_id', $incident->id)->value('created_time'));
         $this->assertNotNull(Setting::get(NotionIssueSyncService::LAST_SYNC_AT_KEY));
         $this->assertSame('Imported 1 issue(s).', $result['message']);
+    }
+
+    public function test_deleting_an_imported_issue_restores_it_on_the_next_sync(): void
+    {
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        $row = $this->row('4062556e44dd81c395b0c542f2599858', 'DB down', '2026-01-12', 'P2', 'Code Bug', createdTime: '2026-07-01 00:00:00Z');
+
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->twice()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            // First run — no watermark yet: full backfill scan.
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => ! str_contains($args['data']['query'] ?? '', 'WHERE')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [$row]]), 'isError' => false])
+            // Second run — the delete rewound the watermark to the deleted
+            // row's createdTime, so the `>=` window re-fetches it.
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', "WHERE createdTime >= '2026-07-01 00:00:00Z'")
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [$row]]), 'isError' => false]);
+
+        app(NotionIssueSyncService::class)->sync();
+
+        $incident = Incident::query()->sole();
+
+        $incident->delete();
+
+        // The FK sets NULL instead of cascading: the page row survives as the
+        // tombstone that tells the next sync this page needs re-importing.
+        $this->assertSame(1, NotionSyncedPage::count());
+        $this->assertNull(NotionSyncedPage::query()->sole()->incident_id);
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(1, $result['created']);
+        $this->assertSame('DB down', Incident::query()->sole()->title);
+        $this->assertSame(1, NotionSyncedPage::count());
+        $this->assertNull(NotionSyncedPage::query()->whereNull('incident_id')->first());
+    }
+
+    public function test_legacy_dangling_row_without_created_time_rewinds_to_a_full_backfill(): void
+    {
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => null]);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // The dangling row has no created_time to rewind to — the recovery
+        // falls back to a full backfill (no WHERE clause), dedupe handles the rest.
+        $this->mockConnectedNotion([
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Legacy restore', '2026-05-01', 'P3', 'Data Issue', createdTime: '2026-05-01 00:00:00Z'),
+        ]);
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(1, $result['created']);
+        $this->assertSame('Legacy restore', Incident::query()->sole()->title);
+        $this->assertSame(0, NotionSyncedPage::query()->whereNull('incident_id')->count());
+        $this->assertSame('2026-05-01 00:00:00Z', Setting::get(NotionIssueSyncService::WATERMARK_KEY));
+    }
+
+    public function test_dry_run_leaves_dangling_rows_and_the_watermark_untouched(): void
+    {
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => null, 'created_time' => '2026-05-01 00:00:00Z']);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // Dry-run skips the recovery, so the query still reads since the
+        // existing watermark.
+        $this->mockConnectedNotion([
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Would restore', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+        ], expectWatermark: '2026-06-01 00:00:00Z');
+
+        app(NotionIssueSyncService::class)->sync(dryRun: true);
+
+        $this->assertSame(1, NotionSyncedPage::query()->whereNull('incident_id')->count());
+        $this->assertSame('2026-06-01 00:00:00Z', Setting::get(NotionIssueSyncService::WATERMARK_KEY));
+        $this->assertSame(0, Incident::count());
     }
 
     public function test_classification_column_wins_over_root_cause_mapping(): void

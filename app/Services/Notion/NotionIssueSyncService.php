@@ -58,6 +58,14 @@ class NotionIssueSyncService
             return $this->finish('failed', 'Notion is not connected — connect it on the Notion Settings page.', 0, 0, $dryRun);
         }
 
+        // Restore semantics (owner 2026-10-28): deleting a Notion-synced
+        // Issue from the dashboard is temporary — the next sync re-imports
+        // it. Permanent removal = delete the row in Notion. Dry-run skips
+        // this: it mutates state by definition.
+        if (! $dryRun) {
+            $this->recoverDeletedIssues();
+        }
+
         $fetch = $this->notion->callToolDetailed('notion-fetch', ['id' => $targetId]);
 
         if ($fetch === null) {
@@ -172,7 +180,13 @@ class NotionIssueSyncService
                 'no' => NotionIssueMapper::generateIssueId(),
             ]);
 
-            NotionSyncedPage::create(['page_id' => $pageId, 'incident_id' => $incident->id]);
+            // created_time is the raw Notion createdTime — the restore path
+            // needs it to rewind the watermark to this row's position.
+            NotionSyncedPage::create([
+                'page_id' => $pageId,
+                'incident_id' => $incident->id,
+                'created_time' => $row['createdTime'] ?? null,
+            ]);
             $created++;
         }
 
@@ -188,6 +202,39 @@ class NotionIssueSyncService
             : "{$label} {$created} issue(s){$held}.";
 
         return $this->finish('ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
+    }
+
+    /**
+     * Re-import Issues deleted from the dashboard: their synced-page rows
+     * dangle (incident_id NULL via the FK's nullOnDelete), so rewind the
+     * watermark to the oldest dangling row's createdTime and delete the
+     * dangling rows — the `>=` window then re-fetches those pages and, their
+     * rows gone, re-imports them (the rest of the window dedupes as
+     * "already synced"). Legacy rows without a stored createdTime force a
+     * full backfill (safe: dedupe). The watermark is never moved forward.
+     */
+    protected function recoverDeletedIssues(): void
+    {
+        $dangling = NotionSyncedPage::query()->whereNull('incident_id')->get();
+
+        if ($dangling->isEmpty()) {
+            return;
+        }
+
+        $legacy = $dangling->contains(fn (NotionSyncedPage $page) => blank($page->created_time));
+        $rewindTo = $legacy ? '' : (string) $dangling->pluck('created_time')->filter()->min();
+        $watermark = (string) Setting::get(self::WATERMARK_KEY);
+
+        if ($rewindTo === '' || ($watermark !== '' && $rewindTo < $watermark)) {
+            Setting::set(self::WATERMARK_KEY, $rewindTo);
+        }
+
+        NotionSyncedPage::query()->whereNull('incident_id')->delete();
+
+        Log::info('Notion issue sync: rewound the watermark to re-import deleted issue(s).', [
+            'dangling' => $dangling->count(),
+            'watermark' => $rewindTo !== '' ? $rewindTo : '(full backfill)',
+        ]);
     }
 
     /**
