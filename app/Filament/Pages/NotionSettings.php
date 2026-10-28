@@ -60,7 +60,7 @@ class NotionSettings extends Page implements HasForms
 
         $expiresAt = app(NotionMcpClient::class)->tokenExpiresAt();
         $expiry = $expiresAt
-            ? ' Access token expires '.now()->setTimestamp($expiresAt)->diffForHumans().'. (auto-renews)'
+            ? ' Access token expires '.now()->setTimestamp($expiresAt)->diffForHumans().' (auto-renews).'
             : '';
 
         return 'Connected — AI chat can search, read, and write Notion.'.$expiry;
