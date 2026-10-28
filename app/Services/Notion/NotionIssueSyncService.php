@@ -182,9 +182,10 @@ class NotionIssueSyncService
             $this->advanceWatermark($rows);
         }
 
+        $held = $skipped > 0 ? "; {$skipped} already synced/duplicate/blank" : '';
         $message = ($created === 0 && $skipped === 0)
             ? 'No new issues.'
-            : "{$label} {$created} issue(s); {$skipped} already synced/duplicate/blank.";
+            : "{$label} {$created} issue(s){$held}.";
 
         return $this->finish('ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
     }

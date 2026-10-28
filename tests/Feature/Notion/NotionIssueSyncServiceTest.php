@@ -61,6 +61,7 @@ class NotionIssueSyncServiceTest extends TestCase
 
         $this->assertTrue(NotionSyncedPage::where('page_id', '4062556e44dd81c395b0c542f2599858')->where('incident_id', $incident->id)->exists());
         $this->assertNotNull(Setting::get(NotionIssueSyncService::LAST_SYNC_AT_KEY));
+        $this->assertSame('Imported 1 issue(s).', $result['message']);
     }
 
     public function test_classification_column_wins_over_root_cause_mapping(): void
@@ -220,6 +221,7 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame('ok', $result['status']);
         $this->assertSame(0, $result['created']);
         $this->assertSame(1, $result['skipped']);
+        $this->assertSame('Imported 0 issue(s); 1 already synced/duplicate/blank.', $result['message']);
         $this->assertSame(1, Incident::count());
     }
 
