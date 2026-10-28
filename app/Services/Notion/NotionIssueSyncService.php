@@ -18,7 +18,10 @@ use Illuminate\Support\Facades\Log;
  * last processed row (Setting "notion_sync_watermark" — the raw createdTime
  * string of the newest row already seen), so Notion is never re-scanned in
  * full. Page-ID AND normalized-title dedupe remain as safety nets (first-run
- * overlap with the CSV backlog, rows sharing the watermark's second).
+ * overlap with the CSV backlog, rows sharing the watermark's second). Issues
+ * deleted from the dashboard are re-imported by direct page lookup
+ * (recoverDeletedIssues) — deleting from the dashboard is temporary;
+ * permanent removal = delete the row in Notion.
  *
  * Live shape (verified 2026-10-27 against mcp.notion.com): `notion-fetch` on
  * a database returns its SCHEMA, not rows — including the queryable
@@ -41,6 +44,14 @@ class NotionIssueSyncService
     /** Per-run cap on new rows; ASC order + watermark picks the rest up next run. */
     protected const SCAN_LIMIT = 200;
 
+    /**
+     * Columns every row query reads — the database's own properties (same
+     * names the CSV importer maps); date properties use the expanded
+     * `date:<name>:start` column documented in the fetched schema.
+     */
+    protected const ROW_COLUMNS = 'url, createdTime, "Name", "date:Date of Incident:start" AS date_start, '
+        .'"Classification by Tech Risk Incident" AS classification, "Root Cause Classification" AS root_cause';
+
     public function __construct(private NotionMcpClient $notion) {}
 
     /**
@@ -56,14 +67,6 @@ class NotionIssueSyncService
 
         if (! $this->notion->connected()) {
             return $this->finish('failed', 'Notion is not connected — connect it on the Notion Settings page.', 0, 0, $dryRun);
-        }
-
-        // Restore semantics (owner 2026-10-28): deleting a Notion-synced
-        // Issue from the dashboard is temporary — the next sync re-imports
-        // it. Permanent removal = delete the row in Notion. Dry-run skips
-        // this: it mutates state by definition.
-        if (! $dryRun) {
-            $this->recoverDeletedIssues();
         }
 
         $fetch = $this->notion->callToolDetailed('notion-fetch', ['id' => $targetId]);
@@ -82,6 +85,21 @@ class NotionIssueSyncService
             return $this->finish('failed', 'Watch target is not a Notion database — set the database page ID on the Notion Settings page.', 0, 0, $dryRun, $fetch['text']);
         }
 
+        $created = 0;
+        $skipped = 0;
+        $lines = [];
+
+        // Restore semantics (owner 2026-10-28): deleting a Notion-synced
+        // Issue from the dashboard is temporary — the next sync re-imports
+        // it. Permanent removal = delete the row in Notion. Needs the
+        // collection URL, hence after the fetch. Dry-run skips this: it
+        // mutates state by definition.
+        if (! $dryRun) {
+            $recovered = $this->recoverDeletedIssues($collectionUrl, $lines);
+            $created += $recovered['created'];
+            $skipped += $recovered['skipped'];
+        }
+
         $query = $this->notion->callToolDetailed('notion-query-data-sources', [
             'data' => [
                 'data_source_urls' => [$collectionUrl],
@@ -95,9 +113,8 @@ class NotionIssueSyncService
                 // ASC + LIMIT means a burst of new rows is drained oldest
                 // first, the remainder next run (DESC could skip middles).
                 'query' => sprintf(
-                    'SELECT url, createdTime, "Name", "date:Date of Incident:start" AS date_start, '
-                    .'"Classification by Tech Risk Incident" AS classification, "Root Cause Classification" AS root_cause '
-                    .'FROM "%s" %sORDER BY createdTime ASC LIMIT %d',
+                    'SELECT %s FROM "%s" %sORDER BY createdTime ASC LIMIT %d',
+                    self::ROW_COLUMNS,
                     $collectionUrl,
                     $this->whereSinceWatermark(),
                     self::SCAN_LIMIT,
@@ -119,10 +136,6 @@ class NotionIssueSyncService
             return $this->finish('failed', 'Could not read rows from the Notion query response — see the preview for the raw shape.', 0, 0, $dryRun, $query['text']);
         }
 
-        $created = 0;
-        $skipped = 0;
-        $lines = [];
-
         // The `>=` window always re-fetches rows sharing the watermark's
         // second; ones already handled last run are expected re-reads, not
         // findings — skipped but never counted.
@@ -140,54 +153,11 @@ class NotionIssueSyncService
                 continue;
             }
 
-            $title = $row['Name'] ?? null;
-
-            if (blank($title) || NotionIssueMapper::findDuplicateByTitle((string) $title) !== null) {
-                if (! $boundary) {
-                    $skipped++;
-                }
-
-                continue;
-            }
-
-            $incidentDate = $this->parseDate($row['date_start'] ?? null, $row['createdTime'] ?? null);
-
-            // The database's own severity column wins; the root-cause map is
-            // the fallback for rows where nobody classified it yet.
-            $severity = NotionIssueMapper::mapClassificationToSeverity($row['classification'] ?? null)
-                ?? NotionIssueMapper::mapSeverityToCode((string) ($row['root_cause'] ?? 'G'));
-
-            $lines[] = "- {$title} ({$incidentDate->toDateString()}, {$severity})";
-
-            if ($dryRun) {
+            if ($this->importRow($row, $pageId, $dryRun, $lines) !== null) {
                 $created++;
-
-                continue;
+            } elseif (! $boundary) {
+                $skipped++;
             }
-
-            $incident = Incident::create([
-                'title' => NotionIssueMapper::cleanTitle((string) $title),
-                'incident_date' => $incidentDate,
-                'entry_date_tech_risk' => $incidentDate->format('Y-m-d'),
-                'severity' => $severity,
-                'classification' => IncidentClassification::Issue->value,
-                // NOT NULL "Area"/"Source" enums — the CSV importer leaves
-                // them unset (it only fills incident_type_id); Notion issues
-                // are internally tracked tech issues.
-                'incident_type' => 'Tech',
-                'incident_source' => 'Internal',
-                'incident_type_id' => IncidentType::first()?->id,
-                'no' => NotionIssueMapper::generateIssueId(),
-            ]);
-
-            // created_time is the raw Notion createdTime — the restore path
-            // needs it to rewind the watermark to this row's position.
-            NotionSyncedPage::create([
-                'page_id' => $pageId,
-                'incident_id' => $incident->id,
-                'created_time' => $row['createdTime'] ?? null,
-            ]);
-            $created++;
         }
 
         $label = $dryRun ? 'Would import' : 'Imported';
@@ -205,36 +175,137 @@ class NotionIssueSyncService
     }
 
     /**
-     * Re-import Issues deleted from the dashboard: their synced-page rows
-     * dangle (incident_id NULL via the FK's nullOnDelete), so rewind the
-     * watermark to the oldest dangling row's createdTime and delete the
-     * dangling rows — the `>=` window then re-fetches those pages and, their
-     * rows gone, re-imports them (the rest of the window dedupes as
-     * "already synced"). Legacy rows without a stored createdTime force a
-     * full backfill (safe: dedupe). The watermark is never moved forward.
+     * Map one Notion row to an Issue and (unless dry-run) create it with its
+     * synced-page row. Null when the row is blank or a duplicate title —
+     * the caller decides whether that counts as skipped. Shared by the main
+     * window loop and deleted-issue recovery so the two cannot drift.
      */
-    protected function recoverDeletedIssues(): void
+    protected function importRow(array $row, string $pageId, bool $dryRun, array &$lines): ?Incident
+    {
+        $title = $row['Name'] ?? null;
+
+        if (blank($title) || NotionIssueMapper::findDuplicateByTitle((string) $title) !== null) {
+            return null;
+        }
+
+        $incidentDate = $this->parseDate($row['date_start'] ?? null, $row['createdTime'] ?? null);
+
+        // The database's own severity column wins; the root-cause map is
+        // the fallback for rows where nobody classified it yet.
+        $severity = NotionIssueMapper::mapClassificationToSeverity($row['classification'] ?? null)
+            ?? NotionIssueMapper::mapSeverityToCode((string) ($row['root_cause'] ?? 'G'));
+
+        $lines[] = "- {$title} ({$incidentDate->toDateString()}, {$severity})";
+
+        if ($dryRun) {
+            return new Incident;
+        }
+
+        $incident = Incident::create([
+            'title' => NotionIssueMapper::cleanTitle((string) $title),
+            'incident_date' => $incidentDate,
+            'entry_date_tech_risk' => $incidentDate->format('Y-m-d'),
+            'severity' => $severity,
+            'classification' => IncidentClassification::Issue->value,
+            // NOT NULL "Area"/"Source" enums — the CSV importer leaves
+            // them unset (it only fills incident_type_id); Notion issues
+            // are internally tracked tech issues.
+            'incident_type' => 'Tech',
+            'incident_source' => 'Internal',
+            'incident_type_id' => IncidentType::first()?->id,
+            'no' => NotionIssueMapper::generateIssueId(),
+        ]);
+
+        NotionSyncedPage::create(['page_id' => $pageId, 'incident_id' => $incident->id]);
+
+        return $incident;
+    }
+
+    /**
+     * Re-import Issues deleted from the dashboard. Their synced-page rows
+     * dangle (incident_id NULL via the FK's nullOnDelete). Each dangling
+     * page is fetched from Notion DIRECTLY by page ID — no watermark
+     * rewind, so nothing else is re-read and the incremental window is
+     * untouched. A page no longer in Notion loses its tombstone (permanent
+     * removal = delete the row in Notion); a failed lookup keeps it for the
+     * next run. A page whose title already exists skips (restoring would
+     * duplicate) and loses its tombstone so it is not retried every run.
+     *
+     * @param  array<int, string>  $lines
+     * @return array{created: int, skipped: int}
+     */
+    protected function recoverDeletedIssues(string $collectionUrl, array &$lines): array
     {
         $dangling = NotionSyncedPage::query()->whereNull('incident_id')->get();
 
-        if ($dangling->isEmpty()) {
-            return;
+        $created = 0;
+        $skipped = 0;
+
+        foreach ($dangling as $page) {
+            $row = $this->queryPageById($collectionUrl, $page->page_id);
+
+            if ($row === null) {
+                continue;
+            }
+
+            if ($row === []) {
+                Log::info('Notion issue sync: page no longer in Notion, dropping the tombstone.', ['page_id' => $page->page_id]);
+                $page->delete();
+
+                continue;
+            }
+
+            // Free the page ID first — importRow re-registers it.
+            NotionSyncedPage::where('page_id', $page->page_id)->whereNull('incident_id')->delete();
+
+            if ($this->importRow($row, $page->page_id, false, $lines) !== null) {
+                $created++;
+            } else {
+                $skipped++;
+            }
         }
 
-        $legacy = $dangling->contains(fn (NotionSyncedPage $page) => blank($page->created_time));
-        $rewindTo = $legacy ? '' : (string) $dangling->pluck('created_time')->filter()->min();
-        $watermark = (string) Setting::get(self::WATERMARK_KEY);
+        return ['created' => $created, 'skipped' => $skipped];
+    }
 
-        if ($rewindTo === '' || ($watermark !== '' && $rewindTo < $watermark)) {
-            Setting::set(self::WATERMARK_KEY, $rewindTo);
+    /**
+     * One page's row from the watched database, looked up by page ID.
+     * Returns the row, [] when the page no longer exists, or null when the
+     * lookup failed (the caller keeps the tombstone and retries next run).
+     *
+     * @return array<string, mixed>|array<empty, empty>|null
+     */
+    protected function queryPageById(string $collectionUrl, string $pageId): ?array
+    {
+        // $pageId is 32-hex (pageIdFromUrl) — no quoting or injection concerns.
+        if (! ctype_xdigit($pageId)) {
+            return null;
         }
 
-        NotionSyncedPage::query()->whereNull('incident_id')->delete();
-
-        Log::info('Notion issue sync: rewound the watermark to re-import deleted issue(s).', [
-            'dangling' => $dangling->count(),
-            'watermark' => $rewindTo !== '' ? $rewindTo : '(full backfill)',
+        $query = $this->notion->callToolDetailed('notion-query-data-sources', [
+            'data' => [
+                'data_source_urls' => [$collectionUrl],
+                'query' => sprintf(
+                    'SELECT %s FROM "%s" WHERE url LIKE \'%%%s%%\'',
+                    self::ROW_COLUMNS,
+                    $collectionUrl,
+                    $pageId,
+                ),
+            ],
         ]);
+
+        if ($query === null || $query['isError']) {
+            Log::warning('Notion issue sync: deleted-page lookup failed.', [
+                'page_id' => $pageId,
+                'text' => $query['text'] ?? null,
+            ]);
+
+            return null;
+        }
+
+        $rows = $this->extractRows((string) $query['text']);
+
+        return $rows === null ? null : ($rows[0] ?? []);
     }
 
     /**

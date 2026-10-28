@@ -8,5 +8,5 @@ use Illuminate\Database\Eloquent\Model;
 
 class NotionSyncedPage extends Model
 {
-    protected $fillable = ['page_id', 'incident_id', 'created_time'];
+    protected $fillable = ['page_id', 'incident_id'];
 }
