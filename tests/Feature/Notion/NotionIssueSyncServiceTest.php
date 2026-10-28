@@ -103,11 +103,32 @@ class NotionIssueSyncServiceTest extends TestCase
         app(NotionIssueSyncService::class)->sync();
         $result = app(NotionIssueSyncService::class)->sync();
 
+        // The re-fetched row shares the watermark's second — an expected
+        // boundary re-read, not a finding, so the run reports nothing.
         $this->assertSame('ok', $result['status']);
         $this->assertSame(0, $result['created']);
-        $this->assertSame(1, $result['skipped']);
+        $this->assertSame(0, $result['skipped']);
+        $this->assertSame('No new issues.', $result['message']);
         $this->assertSame(1, Incident::count());
         $this->assertSame(1, NotionSyncedPage::count());
+    }
+
+    public function test_same_second_straggler_at_the_boundary_still_imports(): void
+    {
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-07-01 00:00:00Z');
+        $this->mockConnectedNotion([
+            // createdTime equals the watermark but the page is new — a
+            // same-second straggler the previous run's query missed. The
+            // boundary flag must never suppress the import itself.
+            $this->row('cccc556e44dd81c395b0c542f2599ccc', 'Boundary straggler', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+        ], expectWatermark: '2026-07-01 00:00:00Z');
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(1, $result['created']);
+        $this->assertSame('Boundary straggler', Incident::sole()->title);
     }
 
     public function test_incremental_run_reads_only_rows_since_the_watermark(): void

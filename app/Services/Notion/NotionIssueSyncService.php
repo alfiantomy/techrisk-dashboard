@@ -115,11 +115,19 @@ class NotionIssueSyncService
         $skipped = 0;
         $lines = [];
 
+        // The `>=` window always re-fetches rows sharing the watermark's
+        // second; ones already handled last run are expected re-reads, not
+        // findings — skipped but never counted.
+        $watermark = (string) Setting::get(self::WATERMARK_KEY);
+
         foreach ($rows as $row) {
+            $boundary = ((string) ($row['createdTime'] ?? '')) === $watermark;
             $pageId = $this->pageIdFromUrl((string) ($row['url'] ?? ''));
 
             if ($pageId === null || NotionSyncedPage::where('page_id', $pageId)->exists()) {
-                $skipped++;
+                if (! $boundary) {
+                    $skipped++;
+                }
 
                 continue;
             }
@@ -127,7 +135,9 @@ class NotionIssueSyncService
             $title = $row['Name'] ?? null;
 
             if (blank($title) || NotionIssueMapper::findDuplicateByTitle((string) $title) !== null) {
-                $skipped++;
+                if (! $boundary) {
+                    $skipped++;
+                }
 
                 continue;
             }
@@ -172,7 +182,11 @@ class NotionIssueSyncService
             $this->advanceWatermark($rows);
         }
 
-        return $this->finish('ok', "{$label} {$created} issue(s); {$skipped} already synced/duplicate/blank.", $created, $skipped, $dryRun, implode("\n", $lines));
+        $message = ($created === 0 && $skipped === 0)
+            ? 'No new issues.'
+            : "{$label} {$created} issue(s); {$skipped} already synced/duplicate/blank.";
+
+        return $this->finish('ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
     }
 
     /**
