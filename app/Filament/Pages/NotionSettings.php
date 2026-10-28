@@ -120,7 +120,7 @@ class NotionSettings extends Page implements HasForms
                         ])->columnSpanFull(),
                     ]),
 
-                Section::make('Sub-page Sync')
+                Section::make('Sync issue from Notion')
                     ->description('The scheduler reads this Notion page/database at 09:00, 12:00, 15:00, and 18:00 (WIB); new sub-pages are imported as Issues (dedupe on Notion page ID).')
                     ->schema([
                         TextInput::make('watch_page_id')
