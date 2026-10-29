@@ -1636,3 +1636,106 @@ rule" but "the rule was computed from a second, parallel query".
       explicitly.
 
 ---
+
+### [BUG-030] - Ultracode audit of the Notion sync feature: a poison-pill row wedged the unattended cron and orphaned Incidents, OAuth failures surfaced as raw 500s, and a dead refresh token still claimed "(auto-renews)"
+
+**Date:** 2026-10-29
+**Discovered By:** Ultracode multi-agent audit (owner request: "lakukan pengecekan ulang, apakah fitur sync notion ini sudah baik dan benar") — 18 agents, 11 confirmed findings
+**Severity:** High
+**Status:** Resolved
+
+### Description
+A full audit of the Notion sync feature (OAuth connection, scheduled
+sub-page sync, deleted-issue recovery) confirmed one critical cluster and
+three LOW findings. Critical cluster (all in the unattended cron path):
+one throwing row aborted the ENTIRE sync AND left an orphan Incident —
+the Incident row landed, the synced-page row did not, the watermark still
+advanced past it, so the row was permanently invisible to every later
+run. Recovery deleted a tombstone BEFORE re-importing, so a throwing
+restore lost the restore promise forever. The OAuth callback's success
+handler redirected to `route('notion.settings')` — a route name that does
+not exist (Filament pages have no named routes), so a successful
+connection would have 500'd; only untested-in-CI because the success flow
+needs a live Notion round-trip. LOW cluster (owner: "kerjakan 1, 2, 3"):
+a dead refresh token still rendered "(auto-renews)"; OAuth failures
+(denied consent, expired session state) surfaced as a raw 500; title
+dedupe hydrated the whole Issue table for EVERY row.
+
+### Root Cause Analysis (5 Whys)
+1. Why did one bad row wedge the sync?
+   - The loop had no per-row isolation: any Throwable aborted the run.
+2. Why did an orphan Incident result?
+   - `Incident::create` + `NotionSyncedPage::create` were two separate
+     writes; a concurrent manual sync's unique `page_id` insert could
+     fail after the Incident landed.
+3. Why was the row permanently invisible?
+   - The watermark advanced past the failed row, so no run re-read it.
+4. Why did the callback 500 on success and on denial?
+   - `route('notion.settings')` does not exist (Filament page), and the
+     vendor callback closure throws before the app's handler — with the
+     token handler never reached on denial.
+5. Why did middleware not fix the OAuth 500s?
+   - Laravel 12's Pipeline wraps the route destination (and every layer)
+     in `catch (Throwable) → ExceptionHandler::render()` — `$next`
+     RETURNS a rendered 500 response; route middleware can never catch
+     route-closure throws. The catch belongs in `$exceptions->renderable()`.
+
+### Impact
+- [ ] User facing?
+- [x] Data loss/corruption? (orphan Incidents; a poison row silently
+      blocked every issue behind it from importing — the dashboard went
+      stale without any error the admin would see)
+- [ ] Performance degradation? (title dedupe was O(rows × table) — hydrating
+      the whole Issue table per imported row)
+- [ ] Security vulnerability?
+- [x] Broken workflow? (a successful OAuth connection would have 500'd;
+      denied consent / expired session = raw 500; dead refresh token lied
+      about auto-renewal)
+
+**Impact Assessment:** The unattended cron is the feature's whole point —
+a single malformed Notion row (e.g. a title longer than 255 chars under
+MySQL strict mode) silently stalled ALL future imports while the
+dashboard showed nothing. The OAuth 500s hit the one admin performing the
+connection, at the exact moment they were trying to fix it.
+
+### Fix
+- `NotionIssueSyncService`: per-row try/catch (report FAILED in the
+  preview, keep importing); Incident + synced-page writes in ONE
+  `DB::transaction`; the watermark advances only over rows BEFORE the
+  first failure and status becomes `partial` (fix the Notion row → next
+  run re-imports it); recovery's tombstone delete + import in one
+  transaction so a throwing restore keeps its tombstone.
+- `routes/web.php`: callback redirects to `NotionSettings::getUrl()`.
+- `NotionMcpClient`: `notion_mcp_needs_reconnect` Setting flag — set on
+  refresh failure, cleared by any successful token store/disconnect
+  (transient outages self-heal; good tokens are never deleted).
+- `NotionSettings::connectionStatus()`: "Reconnect required" / past-expiry
+  "renewal pending" wording instead of a blind "(auto-renews)".
+- `bootstrap/app.php`: `$exceptions->renderable` for `OAuthException`
+  scoped to `mcp/oauth/*` — Filament danger notification + redirect to
+  the settings page.
+- `NotionIssueMapper::existingNormalizedTitles()` + per-run in-memory
+  title set (per-instance, never static — CLAUDE.md BUG-023 lesson):
+  one `pluck('title')` per run; imported titles join the set so two
+  identical rows in one run still dedupe.
+
+### Prevention Checklist
+- [x] Unattended import loops isolate per row (report-and-continue) and
+      NEVER mark a failed row's position processed — the watermark stops
+      at the first failure and the run reports `partial`
+- [x] Two writes that must agree (Incident + its synced-page pointer)
+      share one `DB::transaction`
+- [x] A status UI must never claim self-renewal it cannot verify — derive
+      "needs reconnect" from an explicit failure flag, not from "token exists"
+- [x] Route exceptions are caught in `$exceptions->renderable()`, never in
+      route middleware (Laravel 12 pipeline renders route throws itself —
+      verified empirically: `$next` returned a 500 response, no throw)
+- [x] DB failures in tests are simulated by injecting model events
+      (`Incident::creating(... throw ...)`) — no mocks, the real write path
+      is exercised
+- [x] Lesson: test the SUCCESS path of every externally-triggered flow —
+      the callback's `route('notion.settings')` typo shipped because only
+      gating (403) was tested; the success redirect needs a live Notion
+      round-trip and was never exercised until the feature tests faked it
+
+---

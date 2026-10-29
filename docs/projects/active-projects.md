@@ -45,6 +45,49 @@
 
 ## Active Projects
 
+### [PROJ-017] Notion MCP connection, AI-chat tools, scheduled sub-page sync
+
+**Status:** Done (live-verified 2026-10-27; merge pending)
+**Priority:** P2
+**Start Date:** 2026-10-23
+
+#### Description
+Connect the dashboard to Notion via MCP (Model Context Protocol) against Notion's hosted MCP server (`https://mcp.notion.com/mcp`, streamable HTTP, OAuth 2.1 + PKCE with dynamic client registration — no manual Notion app or API token). Three capabilities share the one workspace-wide connection: (1) four AI-chat tools (search/fetch/create-pages/update-page) exposed through the existing `AgentTool` registry — chat-only by construction since War Room requires explicit `enabled_tools` opt-in and scheduled agents are text-only; (2) a scheduler (09:00/12:00/15:00/18:00 WIB — owner-set cadence 2026-10-27, was every 15 min) that fetches a configured watch page/database and auto-imports new sub-pages into the **Issue list** (`classification='Issue'`), deduped on Notion page ID (not title) via the `notion_synced_pages` table, mapping fields through `NotionIssueMapper` — logic extracted from `IssuesImporter` so the CSV importer and MCP sync cannot drift (BUG-008 lesson); (3) a Notion Settings admin page (connect/disconnect, watch target, last-sync status) gated on `manage api tokens`. Tokens live encrypted (`Crypt::encryptString`) in `Setting` key `notion_mcp_token`; refresh is lock-guarded with re-read-after-acquire because Notion rotates refresh tokens on use. Supersedes the discarded direct-REST Notion integration.
+
+#### Technical Approach
+- `laravel/mcp` v1.1+ client (`Client::web()` + `withOAuth()` + lazy `withToken()`), registered in `AppServiceProvider`, OAuth routes via `Mcp::oAuthRoutesFor('notion', …)` — **APP_URL must be publicly reachable** for the callback.
+- `app/Services/Notion/` — `NotionMcpClient` (connection/refresh/callTool, never throws toward chat), `NotionIssueMapper` (shared mapping), `NotionIssueSyncService` (sync + dedupe), `Tools/*` (4 `AgentToolInterface` passthroughs).
+- `notion-fetch` on a database returns its **schema** (incl. the queryable `collection://<uuid>` table), not rows — the sync therefore goes fetch → `notion-query-data-sources` (arguments wrapped in a `data` object) → flat rows. Verified live 2026-10-27.
+- **Schema assumption (owner decision 2026-10-27: keep as is):** the sync is hard-coded to the current database template's property names (`Name`, `Date of Incident`, `Classification by Tech Risk Incident`, `Root Cause Classification`) and one watch target at a time. A database with the same template = zero code changes (swap the watch target); a different schema fails loudly with the MCP "no such column" error. Auto-detection of properties was offered and declined — reconsider only if a differently-shaped database needs syncing.
+- Detailed design: `docs/superpowers/specs/2026-10-23-notion-mcp-design.md`
+
+#### Tasks
+- [x] Install `laravel/mcp:^1.1` (v1.1.1; framework upgraded 12.45.1 → 12.70.1), `config/notion.php`, client registration — 2026-10-23
+- [x] `NotionMcpClient` (token store/refresh/disconnect, `callTool`/`callToolDetailed`) + OAuth routes — 2026-10-23
+- [x] 4 chat tool classes + seeding migration + registry-cache clear — 2026-10-23
+- [x] `NotionIssueMapper` extracted from `IssuesImporter` (importer now delegates to it) — 2026-10-23
+- [x] `NotionIssueSyncService` + `notion_synced_pages` table + `notion:sync-issues --dry-run` + 15-min schedule — 2026-10-23
+- [x] Notion Settings Filament page (connect/disconnect/sync-now/watch target) — 2026-10-23
+- [x] Tests: 46 Notion tests + 15 importer tests green; Pint clean — 2026-10-23
+- [x] Live verification: OAuth connect on localhost, sync flow reworked to the real `notion-fetch`/`notion-query-data-sources` shapes (commit `6390f56`), real sync imported 100 Issues, re-run 0 (dedupe proven), chat tool round-trip OK — 2026-10-27
+- [x] Migrations ran on the real (local) MySQL DB — 2026-10-27
+- [x] OAuth connect/callback routes gated to `manage api tokens` (was any logged-in user — commit `1733600`); incremental sync via `createdTime` watermark so each run reads only new rows, not the full window (owner request 2026-10-27, live-verified: backfill run then `WHERE createdTime >=` accepted by the server)
+- [x] Sync button on the Issue list ("Sync with Notion" between Import and New Issue, gated `manage api tokens`, shared `NotionSyncAction` — commit `fa6b6f7`); schedule 09:00/12:00/15:00/18:00 WIB (commit `5a3a531`); boundary re-read no longer counted + held-back segment only when > 0 (commits `450d6e3`, `4d40897`)
+- [x] Restore semantics (owner 2026-10-28): sync = reconcile — deleting a Notion-synced Issue is temporary, the next sync re-imports it; permanent removal = delete in Notion. `notion_synced_pages.incident_id` → nullable `nullOnDelete` (migration `2026_10_28_000001`), dangling "tombstone" rows re-imported at sync start via direct per-page lookup `WHERE url LIKE '%<page_id>%'` (verified live; a watermark-rewind design was replaced the same day — the server's ~100-row page cap made rewinds re-read up to 100 already-synced rows per run and legacy rows forced multi-run full backfills). Owner's two 27-Oct HBASE rows (cascade-wiped under the old FK) recovered by a one-time watermark clear + backfill walk
+- [ ] Merge `feature/notion-mcp` + deploy (production migrate + Notion connect there)
+
+#### Dependencies
+- None (verified locally end-to-end)
+
+#### Blockers
+- None
+
+#### Progress Updates
+- 2026-10-23: Phases A–D implemented on `feature/notion-mcp`, tests written and passing. Full suite: 907 tests, 7 failures verified pre-existing (6 × Reverb BroadcastException with Docker down + 1 × ChatPersonaParityTest — identical on a clean tree via stash). Flagged pre-existing gap: `IssuesImporter` production path leaves NOT NULL `incident_type`/`incident_source` unset (strict-mode inserts would fail; the sync service sets them explicitly).
+- 2026-10-27: Live-verified on local Docker. Discovery: `notion-fetch` returns a database's schema, not rows → sync switched to the `notion-query-data-sources` flow (commit `6390f56`); severity now reads the database's own "Classification by Tech Risk Incident" column first; title-based dedupe added so CSV-imported rows are not re-created; sync failures surface MCP error text + raw-response preview in the notification; chat-tool parameter schemas corrected against the live server. Result: 100 Issues imported (7 P1 / 3 P2 / 5 P3 / 4 P4 / 93 G), second run 0. Owner decision: sync stays bound to the current database template — swapping databases with the same template needs no code.
+
+---
+
 ### [PROJ-016] Add Action Items button on RCA documents
 
 **Status:** In Progress (iteration 3: AI rewording of drafts)

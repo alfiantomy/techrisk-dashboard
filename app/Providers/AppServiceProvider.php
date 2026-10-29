@@ -26,6 +26,7 @@ use App\Observers\StatusUpdateObserver;
 use App\Observers\UserCacheObserver;
 use App\Policies\ActionImprovementPolicy;
 use App\Policies\IncidentPolicy;
+use App\Services\Notion\NotionMcpClient;
 use App\Services\SensitiveDataFilter;
 use App\Services\TraceIdService;
 use Carbon\Carbon;
@@ -42,6 +43,8 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
+use Laravel\Mcp\Client;
+use Laravel\Mcp\Facades\Mcp;
 use Laravel\Sanctum\Sanctum;
 use Livewire\Livewire;
 
@@ -74,6 +77,15 @@ class AppServiceProvider extends ServiceProvider
 
         // Runtime mail activation + From override from dashboard settings.
         \App\Support\MailSettings::apply();
+
+        // Notion MCP client — one workspace-wide OAuth connection (laravel/mcp
+        // account linking) shared by the AI-chat Notion tools and the scheduled
+        // sub-page sync. The token closure resolves lazily per request/job;
+        // NotionMcpClient handles refresh behind it.
+        Mcp::registerClient('notion', fn () => Client::web(config('notion.mcp_url'))
+            ->withOAuth()
+            ->withToken(fn () => app(NotionMcpClient::class)->accessToken())
+            ->withTimeout((float) config('notion.timeout', 60)));
 
         // Password-reset emails: brand them with the incident-reminder template.
         // Takes full control of Illuminate's ResetPassword::toMail() (the static

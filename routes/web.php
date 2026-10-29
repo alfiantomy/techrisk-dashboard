@@ -1,5 +1,6 @@
 <?php
 
+use App\Filament\Pages\NotionSettings;
 use App\Http\Controllers\Ai\AiSearchController;
 use App\Http\Controllers\Ai\AnalyzeRootCauseController;
 use App\Http\Controllers\Ai\AnalyzeTrendsController;
@@ -50,7 +51,10 @@ use App\Http\Controllers\DownloadActionEvidenceController;
 use App\Http\Controllers\DownloadDocumentController;
 use App\Http\Controllers\WeeklyReportExportController;
 use App\Livewire\RequestAccessForm;
+use App\Services\Notion\NotionMcpClient;
 use Illuminate\Support\Facades\Route;
+use Laravel\Mcp\Client\OAuth\TokenSet;
+use Laravel\Mcp\Facades\Mcp;
 
 Route::post('/admin/ai/enhance-text', TextEnhanceController::class)
     ->middleware(['auth', 'can:manage incidents', 'ai.available:text,model'])
@@ -296,3 +300,15 @@ Route::get('/docs.postman', function () {
 
     return response()->file($path, ['Content-Type' => 'application/json']);
 })->name('docs.postman');
+
+// Notion MCP account linking (laravel/mcp) — registers mcp.oauth.notion.{connect,callback,client-metadata}.
+// The callback stores the exchanged TokenSet as the workspace-wide connection used by the AI-chat
+// Notion tools and the scheduled sub-page sync. Admin-only via `can:` — a non-admin running this
+// flow would silently repoint the workspace-wide token at their own Notion. client-metadata stays
+// public (RFC 7591 discovery). APP_URL must be publicly reachable — Notion redirects the browser
+// back to the callback route.
+Mcp::oAuthRoutesFor('notion', function (string $client, TokenSet $token) {
+    app(NotionMcpClient::class)->storeTokens($token);
+
+    return redirect(NotionSettings::getUrl());
+}, middleware: ['web', 'auth', 'can:manage api tokens']);
