@@ -101,7 +101,9 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame(1, NotionSyncedPage::count());
         $this->assertNull(NotionSyncedPage::query()->sole()->incident_id);
 
-        $result = app(NotionIssueSyncService::class)->sync();
+        // Restore is opt-in (owner 2026-10-29) — only a full sync brings
+        // deleted issues back.
+        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: true);
 
         $this->assertSame('ok', $result['status']);
         $this->assertSame(1, $result['created']);
@@ -121,6 +123,7 @@ class NotionIssueSyncServiceTest extends TestCase
 
         // Permanent removal (owner 2026-10-28): the page no longer exists in
         // Notion, so the tombstone is garbage-collected and nothing imports.
+        // Only a full sync looks at tombstones at all (owner 2026-10-29).
         $this->mock(NotionMcpClient::class)
             ->shouldReceive('connected')->andReturn(true)
             ->shouldReceive('callToolDetailed')->once()->with('notion-fetch', ['id' => 'db-1'])
@@ -134,7 +137,7 @@ class NotionIssueSyncServiceTest extends TestCase
             ))
             ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
 
-        $result = app(NotionIssueSyncService::class)->sync();
+        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: true);
 
         $this->assertSame('ok', $result['status']);
         $this->assertSame('No new issues.', $result['message']);
@@ -161,7 +164,7 @@ class NotionIssueSyncServiceTest extends TestCase
             ))
             ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
 
-        $result = app(NotionIssueSyncService::class)->sync();
+        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: true);
 
         // The tombstone stays so the recovery retries on the next run.
         $this->assertSame('ok', $result['status']);
@@ -200,7 +203,7 @@ class NotionIssueSyncServiceTest extends TestCase
             ))
             ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
 
-        $result = app(NotionIssueSyncService::class)->sync();
+        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: true);
 
         // Same-title issue already exists — restoring would duplicate it.
         $this->assertSame('ok', $result['status']);
@@ -215,8 +218,9 @@ class NotionIssueSyncServiceTest extends TestCase
         Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
         Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
 
-        // Dry-run skips the recovery (it mutates), so only the incremental
-        // window is queried. The dangling row and watermark stay put.
+        // Dry-run without the restore flag never looks at tombstones (restore
+        // is opt-in, owner 2026-10-29), so only the incremental window is
+        // queried. The dangling row and watermark stay put.
         $this->mockConnectedNotion([
             $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Would import', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
         ], expectWatermark: '2026-06-01 00:00:00Z');
@@ -226,6 +230,149 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame(1, NotionSyncedPage::query()->whereNull('incident_id')->count());
         $this->assertSame('2026-06-01 00:00:00Z', Setting::get(NotionIssueSyncService::WATERMARK_KEY));
         $this->assertSame(0, Incident::count());
+    }
+
+    public function test_a_normal_sync_does_not_restore_deleted_issues(): void
+    {
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => null]);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // Deleting from the dashboard is permanent (owner 2026-10-29): the
+        // normal sync never looks at tombstones — no page lookup happens.
+        $this->mockConnectedNotion([], expectWatermark: '2026-06-01 00:00:00Z');
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame('No new issues.', $result['message']);
+        $this->assertSame(1, NotionSyncedPage::query()->whereNull('incident_id')->count());
+        $this->assertSame(0, Incident::count());
+    }
+
+    public function test_dry_run_with_restore_previews_restores_without_touching_anything(): void
+    {
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => null]);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // The preview shows what a full sync would bring back — read-only:
+        // the tombstone survives and nothing is written.
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->once()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', "WHERE url LIKE '%aaaa556e44dd81c395b0c542f2599aaa%'")
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [
+                $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Deleted by accident', '2026-05-20', 'P2', 'Code Bug'),
+            ]]), 'isError' => false])
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', 'WHERE createdTime >=')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
+
+        $result = app(NotionIssueSyncService::class)->sync(dryRun: true, restoreDeleted: true);
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertStringContainsString('Would restore', (string) $result['preview']);
+        $this->assertStringContainsString('Deleted by accident', (string) $result['preview']);
+        $this->assertSame(1, NotionSyncedPage::query()->whereNull('incident_id')->count());
+        $this->assertSame(0, Incident::count());
+    }
+
+    public function test_a_notion_row_whose_title_matches_a_manual_incident_is_skipped(): void
+    {
+        // The pre-sync backlog was partly entered as Incidents (owner
+        // 2026-10-29) — title dedupe must see them or the first sync doubles
+        // every one of them.
+        Incident::create([
+            'title' => 'DB down',
+            'no' => '20260101_IN_1111',
+            'incident_date' => '2026-01-10',
+            'entry_date_tech_risk' => '2026-01-10',
+            'severity' => 'P2',
+            'classification' => IncidentClassification::Incident->value,
+            'incident_type' => 'Tech',
+            'incident_source' => 'Internal',
+        ]);
+
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        $this->mockConnectedNotion([
+            $this->row('4062556e44dd81c395b0c542f2599858', 'Summary of Incident - DB down', '2026-01-12', 'P1', 'Infrastructure (Database)'),
+        ]);
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(0, $result['created']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertSame(1, Incident::count());
+        $this->assertSame(IncidentClassification::Incident->value, Incident::query()->sole()->classification->value);
+        $this->assertSame(0, NotionSyncedPage::count());
+    }
+
+    public function test_dry_run_itemizes_each_row_outcome(): void
+    {
+        $existing = Incident::create([
+            'title' => 'Already there',
+            'no' => '20260101_IS_1111',
+            'incident_date' => '2026-01-10',
+            'entry_date_tech_risk' => '2026-01-10',
+            'severity' => 'P2',
+            'classification' => IncidentClassification::Issue->value,
+            'incident_type' => 'Tech',
+            'incident_source' => 'Internal',
+        ]);
+        NotionSyncedPage::create(['page_id' => 'cccc556e44dd81c395b0c542f2599ccc', 'incident_id' => $existing->id]);
+
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        $this->mockConnectedNotion([
+            $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Brand new row', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Already there', '2026-07-02', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:00Z'),
+            $this->row('cccc556e44dd81c395b0c542f2599ccc', 'Synced before', '2026-07-03', 'P3', 'Data Issue', createdTime: '2026-07-03 00:00:00Z'),
+        ]);
+
+        $result = app(NotionIssueSyncService::class)->sync(dryRun: true);
+
+        $preview = (string) $result['preview'];
+        $this->assertStringContainsString('Brand new row', $preview);
+        $this->assertStringContainsString('Duplicate title (already in the dashboard): Already there', $preview);
+        $this->assertStringContainsString('Already synced from Notion: Synced before', $preview);
+        $this->assertSame('Would import 1 issue(s); 2 already synced/duplicate/blank.', $result['message']);
+    }
+
+    public function test_the_boundary_reread_is_never_reported_as_a_skip(): void
+    {
+        $existing = Incident::create([
+            'title' => 'Already there',
+            'no' => '20260101_IS_1111',
+            'incident_date' => '2026-01-10',
+            'entry_date_tech_risk' => '2026-01-10',
+            'severity' => 'P2',
+            'classification' => IncidentClassification::Issue->value,
+            'incident_type' => 'Tech',
+            'incident_source' => 'Internal',
+        ]);
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => $existing->id]);
+        NotionSyncedPage::create(['page_id' => 'bbbb556e44dd81c395b0c542f2599bbb', 'incident_id' => $existing->id]);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-07-01 00:00:00Z');
+
+        $this->mockConnectedNotion([
+            // The `>=` window re-reads this row every run — an expected
+            // re-read, never a finding.
+            $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Synced before', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Later synced', '2026-07-02', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:00Z'),
+        ], expectWatermark: '2026-07-01 00:00:00Z');
+
+        $result = app(NotionIssueSyncService::class)->sync(dryRun: true);
+
+        $preview = (string) $result['preview'];
+        $this->assertStringContainsString('Already synced from Notion: Later synced', $preview);
+        $this->assertStringNotContainsString('Already synced from Notion: Synced before', $preview);
+        $this->assertSame('Would import 0 issue(s); 1 already synced/duplicate/blank.', $result['message']);
     }
 
     public function test_classification_column_wins_over_root_cause_mapping(): void
@@ -605,7 +752,7 @@ class NotionIssueSyncServiceTest extends TestCase
             ))
             ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
 
-        $result = app(NotionIssueSyncService::class)->sync();
+        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: true);
 
         $this->assertSame('partial', $result['status']);
         // The tombstone survived the rolled-back import — the restore retries.

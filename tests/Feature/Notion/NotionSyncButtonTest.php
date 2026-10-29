@@ -71,6 +71,21 @@ class NotionSyncButtonTest extends TestCase
         $this->assertSame(0, Incident::count());
     }
 
+    public function test_the_list_button_always_runs_a_normal_sync(): void
+    {
+        // Full sync lives on the Notion Settings page only (owner
+        // 2026-10-29) — the list button has no checkbox and ignores any
+        // posted restoreDeleted data.
+        $this->grant('manage api tokens', 'view issues');
+        $this->mock(NotionIssueSyncService::class)
+            ->shouldReceive('sync')->once()->with(false, false)
+            ->andReturn(['status' => 'ok', 'message' => 'No new issues.', 'created' => 0, 'skipped' => 0, 'preview' => null]);
+
+        Livewire::actingAs($this->user)->test(ListIssues::class)
+            ->callAction('syncWithNotion', data: ['restoreDeleted' => true])
+            ->assertNotified('No new issues.');
+    }
+
     private function grant(string ...$permissions): void
     {
         foreach ($permissions as $permission) {

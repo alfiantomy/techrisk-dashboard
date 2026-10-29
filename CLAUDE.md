@@ -128,7 +128,7 @@ Services: `app` (PHP-FPM 8.2), `nginx`, `mysql` (port 3306), `redis` (port 6379)
 - **Factories:** Use for all test data generation
 - **RefreshDatabase** trait for clean state
 - SQLite in-memory for fast test runs
-- **Baseline: 981 tests / 3,419 assertions green (2026-10-29, merge of upstream main into the Notion feature branch; full history in `docs/reference/testing-standards.md`).** A change that drops this count or its assertions is a regression, not a refactor — unless the delta is a deliberate feature deletion recorded in the baseline history (`docs/reference/testing-standards.md`).
+- **Baseline: 1004 tests / 3,523 assertions green (2026-10-29, sync UI placement + status round: full sync is Notion-Settings-only, in-section sync buttons, Connect/Reconnect labels, color-coded status; full history in `docs/reference/testing-standards.md`).** A change that drops this count or its assertions is a regression, not a refactor — unless the delta is a deliberate feature deletion recorded in the baseline history (`docs/reference/testing-standards.md`).
 
 ---
 

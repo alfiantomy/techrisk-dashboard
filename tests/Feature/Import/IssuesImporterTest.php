@@ -183,10 +183,13 @@ class IssuesImporterTest extends TestCase
         $this->assertFalse($record->exists);
     }
 
-    public function test_only_matches_issues_not_incidents(): void
+    public function test_matches_incident_classified_rows_too(): void
     {
+        // Owner 2026-10-29: dedupe sees the WHOLE table — the pre-sync
+        // backlog was partly entered as Incidents, so a CSV row matching one
+        // of those is the same case, not a new Issue.
         Incident::factory()->create([
-            'classification' => 'Incident', // Not Issue
+            'classification' => 'Incident',
             'title' => 'Login Error',
             'no' => '20250101_IN_001',
         ]);
@@ -194,11 +197,9 @@ class IssuesImporterTest extends TestCase
         $importer = new IssuesImporter($this->import, ['Name' => 'Name'], []);
         $this->setImporterData($importer, ['Name' => 'Login Error']);
 
-        // Should NOT throw exception because classification is 'Incident', not 'Issue'
-        $record = $importer->resolveRecord();
+        $this->expectException(RowImportFailedException::class);
 
-        $this->assertInstanceOf(Incident::class, $record);
-        $this->assertFalse($record->exists);
+        $importer->resolveRecord();
     }
 
     public function test_combined_differences_are_still_detected(): void

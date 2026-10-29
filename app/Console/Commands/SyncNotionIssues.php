@@ -10,13 +10,14 @@ use Illuminate\Console\Command;
 class SyncNotionIssues extends Command
 {
     protected $signature = 'notion:sync-issues
-        {--dry-run : List what would be imported (and print the raw Notion response shape) without writing}';
+        {--dry-run : List what would be imported (and print the raw Notion response shape) without writing}
+        {--restore : Full sync — also re-import issues deleted from the dashboard}';
 
     protected $description = 'Import new Notion sub-pages as Issue records (dedupe on Notion page ID)';
 
     public function handle(NotionIssueSyncService $sync): int
     {
-        $result = $sync->sync(dryRun: (bool) $this->option('dry-run'));
+        $result = $sync->sync(dryRun: (bool) $this->option('dry-run'), restoreDeleted: (bool) $this->option('restore'));
 
         $result['status'] === 'ok'
             ? $this->info($result['message'])
