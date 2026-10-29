@@ -22,7 +22,8 @@ class ListIssues extends ListRecords
                 ->label('Sync with Notion')
                 ->icon('heroicon-m-arrow-path')
                 ->visible(fn (): bool => auth()->user()->can('manage api tokens'))
-                ->action(fn () => NotionSyncAction::run()),
+                ->form(NotionSyncAction::form())
+                ->action(fn (array $data) => NotionSyncAction::run(restoreDeleted: (bool) ($data['restoreDeleted'] ?? false))),
             Actions\ImportAction::make()
                 ->importer(IssuesImporter::class)
                 ->visible(fn (): bool => auth()->user()->can('manage issues')),

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Notion;
 
-use App\Enums\IncidentClassification;
 use App\Helpers\StringHelper;
 use App\Models\Incident;
 use Illuminate\Support\Carbon;
@@ -71,24 +70,30 @@ class NotionIssueMapper
         return $uniqueId;
     }
 
-    /** Case-insensitive/normalized duplicate check against existing issues. */
+    /**
+     * Case-insensitive/normalized duplicate check against the whole table —
+     * Incidents too, not just Issues (owner 2026-10-29: the pre-sync backlog
+     * was partly entered as Incidents; a Notion row matching one of those is
+     * the same case, not a new Issue).
+     */
     public static function findDuplicateByTitle(string $name): ?Incident
     {
         $normalizedTitle = StringHelper::normalizeForComparison($name);
 
-        return Incident::where('classification', IncidentClassification::Issue->value)
+        return Incident::query()
             ->get()
             ->first(fn (Incident $incident) => StringHelper::normalizeForComparison((string) $incident->title) === $normalizedTitle);
     }
 
     /**
-     * Normalized titles of every existing Issue, as a set — one query. The
-     * sync service uses this instead of the per-row findDuplicateByTitle()
-     * hydration above (which loads the whole Issue table for every row).
+     * Normalized titles of every existing incident row (Issues AND Incidents
+     * — see findDuplicateByTitle), as a set — one query. The sync service
+     * uses this instead of the per-row findDuplicateByTitle() hydration above
+     * (which loads the whole table for every row).
      */
     public static function existingNormalizedTitles(): array
     {
-        return Incident::where('classification', IncidentClassification::Issue->value)
+        return Incident::query()
             ->pluck('title')
             ->mapWithKeys(fn ($title) => [StringHelper::normalizeForComparison((string) $title) => true])
             ->all();

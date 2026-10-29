@@ -2,10 +2,17 @@
 
 namespace Tests\Unit\Services\Notion;
 
+use App\Enums\IncidentClassification;
+use App\Models\Incident;
 use App\Services\Notion\NotionIssueMapper;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
+/**
+ * Title dedupe must see the WHOLE table, not just Issues — the pre-sync
+ * backlog was partly entered as Incidents (owner 2026-10-29), and the CSV
+ * importer rides the same check as the Notion sync.
+ */
 class NotionIssueMapperTest extends TestCase
 {
     use RefreshDatabase;
@@ -72,5 +79,33 @@ class NotionIssueMapperTest extends TestCase
             'not a severity' => ['Deployment Issues', null],
             'trailing digit out of range' => ['P5', null],
         ];
+    }
+
+    private function incident(string $classification): Incident
+    {
+        return Incident::create([
+            'title' => 'DB down',
+            'no' => '20260101_IS_1111',
+            'incident_date' => '2026-01-10',
+            'entry_date_tech_risk' => '2026-01-10',
+            'severity' => 'P2',
+            'classification' => $classification,
+            'incident_type' => 'Tech',
+            'incident_source' => 'Internal',
+        ]);
+    }
+
+    public function test_find_duplicate_by_title_matches_an_incident_classified_row(): void
+    {
+        $incident = $this->incident(IncidentClassification::Incident->value);
+
+        $this->assertSame($incident->id, NotionIssueMapper::findDuplicateByTitle('Summary of Incident - DB DOWN')?->id);
+    }
+
+    public function test_existing_normalized_titles_includes_incident_rows(): void
+    {
+        $this->incident(IncidentClassification::Incident->value);
+
+        $this->assertArrayHasKey('db down', NotionIssueMapper::existingNormalizedTitles());
     }
 }
