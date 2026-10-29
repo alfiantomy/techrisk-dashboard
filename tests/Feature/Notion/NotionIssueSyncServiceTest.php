@@ -9,6 +9,7 @@ use App\Services\Notion\NotionIssueSyncService;
 use App\Services\Notion\NotionMcpClient;
 use App\Services\Notion\NotionSyncedPage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Mockery;
 use Tests\TestCase;
 
@@ -492,6 +493,147 @@ class NotionIssueSyncServiceTest extends TestCase
         app(NotionIssueSyncService::class)->sync();
 
         $this->assertSame('G', Incident::query()->sole()->severity->value);
+    }
+
+    public function test_a_row_that_fails_to_import_does_not_block_later_rows(): void
+    {
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // Simulates the realistic poison pill: a write that throws under
+        // MySQL strict mode (e.g. a Notion title longer than the 255-char
+        // incidents.title column).
+        Incident::creating(fn (Incident $incident) => $incident->title === 'Poison row'
+            ? throw new \RuntimeException('SQLSTATE[22001]: data too long')
+            : null);
+
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->once()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', 'WHERE createdTime >=')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [
+                $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Good row', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+                $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Poison row', '2026-07-02', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:00Z'),
+            ]]), 'isError' => false]);
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('partial', $result['status']);
+        $this->assertSame(1, $result['created']);
+        $this->assertStringContainsString('1 failed', $result['message']);
+        // The failure is diagnosable: named in the preview with its reason.
+        $this->assertStringContainsString('Poison row', (string) $result['preview']);
+        $this->assertStringContainsString('data too long', (string) $result['preview']);
+        // The row after the poison still imported; the poison left no orphan.
+        $this->assertSame('Good row', Incident::query()->sole()->title);
+        $this->assertSame(0, NotionSyncedPage::where('page_id', 'bbbb556e44dd81c395b0c542f2599bbb')->count());
+        // The watermark holds at the first failure — the row is retried next run.
+        $this->assertSame('2026-07-01 00:00:00Z', Setting::get(NotionIssueSyncService::WATERMARK_KEY));
+        $this->assertStringContainsString('partial', (string) Setting::get(NotionIssueSyncService::LAST_SYNC_STATUS_KEY));
+    }
+
+    public function test_a_fixed_poison_row_imports_on_the_next_run(): void
+    {
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        // The row fails exactly once (admin fixes the Notion title in between).
+        $thrown = false;
+        Incident::creating(function (Incident $incident) use (&$thrown) {
+            if ($incident->title === 'Poison row' && ! $thrown) {
+                $thrown = true;
+
+                throw new \RuntimeException('SQLSTATE[22001]: data too long');
+            }
+        });
+
+        $rows = [
+            $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Good row', '2026-07-01', 'P3', 'Data Issue', createdTime: '2026-07-01 00:00:00Z'),
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Poison row', '2026-07-02', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:00Z'),
+        ];
+
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->twice()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            ->shouldReceive('callToolDetailed')->twice()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', 'WHERE createdTime >=')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => $rows]), 'isError' => false]);
+
+        $first = app(NotionIssueSyncService::class)->sync();
+        $this->assertSame('partial', $first['status']);
+        $this->assertSame(1, $first['created']);
+
+        // Run 2 re-reads the window: the good row is the boundary re-read,
+        // the fixed poison row finally imports, and the watermark moves on.
+        $second = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('ok', $second['status']);
+        $this->assertSame(1, $second['created']);
+        $this->assertSame(2, Incident::count());
+        $this->assertSame('2026-07-02 00:00:00Z', Setting::get(NotionIssueSyncService::WATERMARK_KEY));
+    }
+
+    public function test_a_failed_reimport_keeps_the_tombstone_for_the_next_run(): void
+    {
+        NotionSyncedPage::create(['page_id' => 'aaaa556e44dd81c395b0c542f2599aaa', 'incident_id' => null]);
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        Setting::set(NotionIssueSyncService::WATERMARK_KEY, '2026-06-01 00:00:00Z');
+
+        Incident::creating(fn (Incident $incident) => $incident->title === 'Poison'
+            ? throw new \RuntimeException('SQLSTATE[22001]: data too long')
+            : null);
+
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->once()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            // Recovery lookup finds the page…
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', 'WHERE url LIKE')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [
+                $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'Poison', '2026-01-12', 'P2', 'Code Bug'),
+            ]]), 'isError' => false])
+            // …the incremental window is empty.
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', 'WHERE createdTime >=')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => []]), 'isError' => false]);
+
+        $result = app(NotionIssueSyncService::class)->sync();
+
+        $this->assertSame('partial', $result['status']);
+        // The tombstone survived the rolled-back import — the restore retries.
+        $this->assertSame(1, NotionSyncedPage::query()->whereNull('incident_id')->count());
+        $this->assertSame(0, Incident::count());
+    }
+
+    public function test_title_dedup_loads_the_issue_table_once_per_run(): void
+    {
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+        $this->mockConnectedNotion([
+            $this->row('aaaa556e44dd81c395b0c542f2599aaa', 'First row', '2026-01-12', 'P3', 'Data Issue'),
+            $this->row('bbbb556e44dd81c395b0c542f2599bbb', 'Second row', '2026-01-13', 'P3', 'Data Issue'),
+        ]);
+
+        DB::enableQueryLog();
+        app(NotionIssueSyncService::class)->sync();
+        $queries = array_column(DB::getQueryLog(), 'query');
+        DB::disableQueryLog();
+
+        // One title pluck for the whole run — never a per-row full hydration
+        // of every Issue (O(rows × table) on a growing backlog).
+        $plucks = array_filter($queries, fn (string $q) => str_contains($q, 'select "title" from "incidents"'));
+        $hydrations = array_filter($queries, fn (string $q) => str_contains($q, 'select * from "incidents" where "classification"'));
+
+        $this->assertCount(1, $plucks);
+        $this->assertCount(0, $hydrations);
+        $this->assertSame(2, Incident::count());
     }
 
     /**

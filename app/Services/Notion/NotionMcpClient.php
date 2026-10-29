@@ -23,15 +23,25 @@ class NotionMcpClient
 {
     public const TOKEN_KEY = 'notion_mcp_token';
 
+    public const NEEDS_RECONNECT_KEY = 'notion_mcp_needs_reconnect';
+
     public function connected(): bool
     {
         return $this->payload() !== null;
     }
 
+    /** A refresh failed (e.g. the refresh token was revoked) — an admin must re-run OAuth. */
+    public function needsReconnect(): bool
+    {
+        return (bool) Setting::get(self::NEEDS_RECONNECT_KEY, false);
+    }
+
     public function disconnect(): void
     {
         Setting::where('key', self::TOKEN_KEY)->delete();
+        Setting::where('key', self::NEEDS_RECONNECT_KEY)->delete();
         Cache::forget('setting.'.self::TOKEN_KEY);
+        Cache::forget('setting.'.self::NEEDS_RECONNECT_KEY);
     }
 
     public function storeTokens(TokenSet $tokens): void
@@ -148,6 +158,10 @@ class NotionMcpClient
             );
         } catch (Throwable $e) {
             Log::warning('Notion MCP token refresh failed', ['error' => $e->getMessage()]);
+            // Honest state: the connection is no longer self-renewing. A
+            // later successful refresh/storePayload clears the flag, so a
+            // transient outage never turns into a false alarm.
+            Setting::set(self::NEEDS_RECONNECT_KEY, true);
 
             return $payload; // stale token — the next call surfaces the 401
         } finally {
@@ -174,6 +188,10 @@ class NotionMcpClient
             $payload,
             fn ($v) => $v !== null
         ))));
+        // Fresh tokens landed (OAuth or a successful refresh) — connection is
+        // self-renewing again.
+        Setting::where('key', self::NEEDS_RECONNECT_KEY)->delete();
+        Cache::forget('setting.'.self::NEEDS_RECONNECT_KEY);
     }
 
     /**

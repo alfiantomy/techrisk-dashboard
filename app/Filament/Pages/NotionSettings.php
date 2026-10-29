@@ -54,11 +54,23 @@ class NotionSettings extends Page implements HasForms
 
     public function connectionStatus(): string
     {
-        if (! app(NotionMcpClient::class)->connected()) {
+        $client = app(NotionMcpClient::class);
+
+        if (! $client->connected()) {
             return 'Not connected — AI chat Notion tools and the sub-page sync are inactive.';
         }
 
-        $expiresAt = app(NotionMcpClient::class)->tokenExpiresAt();
+        if ($client->needsReconnect()) {
+            return 'Reconnect required — the token could not be renewed (the refresh token may have been revoked in Notion). AI chat Notion tools and the sub-page sync are failing until an admin clicks Connect Notion.';
+        }
+
+        $expiresAt = $client->tokenExpiresAt();
+
+        if ($expiresAt !== null && $expiresAt <= time()) {
+            // Expired and not yet successfully re-newed — do not claim renewal.
+            return 'Connected — token expired '.now()->setTimestamp($expiresAt)->diffForHumans().'; renewal pending. If calls keep failing, click Connect Notion.';
+        }
+
         $expiry = $expiresAt
             ? ' Access token expires '.now()->setTimestamp($expiresAt)->diffForHumans().' (auto-renews).'
             : '';

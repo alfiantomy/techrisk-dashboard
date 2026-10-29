@@ -80,4 +80,17 @@ class NotionIssueMapper
             ->get()
             ->first(fn (Incident $incident) => StringHelper::normalizeForComparison((string) $incident->title) === $normalizedTitle);
     }
+
+    /**
+     * Normalized titles of every existing Issue, as a set — one query. The
+     * sync service uses this instead of the per-row findDuplicateByTitle()
+     * hydration above (which loads the whole Issue table for every row).
+     */
+    public static function existingNormalizedTitles(): array
+    {
+        return Incident::where('classification', IncidentClassification::Issue->value)
+            ->pluck('title')
+            ->mapWithKeys(fn ($title) => [StringHelper::normalizeForComparison((string) $title) => true])
+            ->all();
+    }
 }

@@ -1,5 +1,6 @@
 <?php
 
+use App\Filament\Pages\NotionSettings;
 use App\Http\Controllers\Ai\AiSearchController;
 use App\Http\Controllers\Ai\AnalyzeRootCauseController;
 use App\Http\Controllers\Ai\AnalyzeTrendsController;
@@ -304,5 +305,5 @@ Route::get('/docs.postman', function () {
 Mcp::oAuthRoutesFor('notion', function (string $client, TokenSet $token) {
     app(NotionMcpClient::class)->storeTokens($token);
 
-    return redirect()->route('notion.settings');
+    return redirect(NotionSettings::getUrl());
 }, middleware: ['web', 'auth', 'can:manage api tokens']);

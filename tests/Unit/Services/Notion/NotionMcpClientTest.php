@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\Services\Notion;
 
+use App\Filament\Pages\NotionSettings;
 use App\Models\Setting;
 use App\Services\Notion\NotionMcpClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -160,6 +161,52 @@ class NotionMcpClientTest extends TestCase
 
         $this->assertFalse($client->connected());
         $this->assertNull($client->accessToken());
+    }
+
+    public function test_failed_refresh_marks_the_connection_as_needing_reconnect(): void
+    {
+        app(NotionMcpClient::class)->storeTokens(new TokenSet(
+            accessToken: 'old-access',
+            refreshToken: 'refresh-1',
+            expiresAt: time() - 100,
+            clientId: 'client-1',
+            clientSecret: 'secret-1',
+        ));
+
+        $oauthClient = Mockery::mock(OAuthClient::class);
+        $oauthClient->shouldReceive('refreshCredentials')
+            ->once()
+            ->andThrow(new \RuntimeException('refresh token revoked'));
+
+        $webClient = Mockery::mock(WebClient::class);
+        $webClient->shouldReceive('oAuthClient')->once()->andReturn($oauthClient);
+        Mcp::shouldReceive('client')->once()->with('notion')->andReturn($webClient);
+
+        $client = app(NotionMcpClient::class);
+
+        // Stale token still returned (the next call surfaces the 401)…
+        $this->assertSame('old-access', $client->accessToken());
+        // …but the state is now honest: reconnect required.
+        $this->assertTrue($client->needsReconnect());
+        $this->assertStringContainsString('Reconnect required', app(NotionSettings::class)->connectionStatus());
+    }
+
+    public function test_storing_fresh_tokens_clears_the_reconnect_flag(): void
+    {
+        $client = app(NotionMcpClient::class);
+
+        Setting::set(NotionMcpClient::NEEDS_RECONNECT_KEY, true);
+        $this->assertTrue($client->needsReconnect());
+
+        $client->storeTokens(new TokenSet(accessToken: 'fresh', refreshToken: 'r', expiresAt: time() + 3600));
+
+        $this->assertFalse($client->needsReconnect());
+
+        // A disconnect is a clean slate too.
+        Setting::set(NotionMcpClient::NEEDS_RECONNECT_KEY, true);
+        $client->disconnect();
+
+        $this->assertFalse($client->needsReconnect());
     }
 
     private function storeExpiringToken(): void

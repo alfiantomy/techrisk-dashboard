@@ -9,6 +9,7 @@ use App\Models\Incident;
 use App\Models\IncidentType;
 use App\Models\Setting;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -43,6 +44,9 @@ class NotionIssueSyncService
 
     /** Per-run cap on new rows; ASC order + watermark picks the rest up next run. */
     protected const SCAN_LIMIT = 200;
+
+    /** Normalized titles of existing Issues, loaded once per run — never a per-row table scan. */
+    protected ?array $existingIssueTitles = null;
 
     /**
      * Columns every row query reads — the database's own properties (same
@@ -87,7 +91,12 @@ class NotionIssueSyncService
 
         $created = 0;
         $skipped = 0;
+        $failed = 0;
         $lines = [];
+        // createdTime of the FIRST failed row — the watermark never advances
+        // past it, so the row is retried once its data is fixed (everything
+        // after it was already imported and is absorbed by page-ID dedupe).
+        $firstFailureTime = null;
 
         // Restore semantics (owner 2026-10-28): deleting a Notion-synced
         // Issue from the dashboard is temporary — the next sync re-imports
@@ -98,6 +107,7 @@ class NotionIssueSyncService
             $recovered = $this->recoverDeletedIssues($collectionUrl, $lines);
             $created += $recovered['created'];
             $skipped += $recovered['skipped'];
+            $failed += $recovered['failed'];
         }
 
         $query = $this->notion->callToolDetailed('notion-query-data-sources', [
@@ -153,7 +163,26 @@ class NotionIssueSyncService
                 continue;
             }
 
-            if ($this->importRow($row, $pageId, $dryRun, $lines) !== null) {
+            // Per-row isolation: one throwing row (e.g. a title longer than
+            // incidents.title under MySQL strict mode) must not wedge the
+            // unattended cron — report it and keep importing the rest.
+            try {
+                $imported = $this->importRow($row, $pageId, $dryRun, $lines);
+            } catch (\Throwable $e) {
+                $failed++;
+                $firstFailureTime ??= (string) ($row['createdTime'] ?? '');
+
+                Log::warning('Notion issue sync: row import failed.', [
+                    'page_id' => $pageId,
+                    'title' => $row['Name'] ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+                $lines[] = 'FAILED: '.($row['Name'] ?? $pageId).' — '.$e->getMessage();
+
+                continue;
+            }
+
+            if ($imported !== null) {
                 $created++;
             } elseif (! $boundary) {
                 $skipped++;
@@ -163,15 +192,19 @@ class NotionIssueSyncService
         $label = $dryRun ? 'Would import' : 'Imported';
 
         if (! $dryRun) {
-            $this->advanceWatermark($rows);
+            $rowsForWatermark = $firstFailureTime === null
+                ? $rows
+                : array_values(array_filter($rows, fn (array $candidate): bool => (string) ($candidate['createdTime'] ?? '') < $firstFailureTime));
+            $this->advanceWatermark($rowsForWatermark);
         }
 
         $held = $skipped > 0 ? "; {$skipped} already synced/duplicate/blank" : '';
-        $message = ($created === 0 && $skipped === 0)
+        $broken = $failed > 0 ? "; {$failed} failed" : '';
+        $message = ($created === 0 && $skipped === 0 && $failed === 0)
             ? 'No new issues.'
-            : "{$label} {$created} issue(s){$held}.";
+            : "{$label} {$created} issue(s){$held}{$broken}.";
 
-        return $this->finish('ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
+        return $this->finish($failed > 0 ? 'partial' : 'ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
     }
 
     /**
@@ -184,7 +217,7 @@ class NotionIssueSyncService
     {
         $title = $row['Name'] ?? null;
 
-        if (blank($title) || NotionIssueMapper::findDuplicateByTitle((string) $title) !== null) {
+        if (blank($title) || $this->titleAlreadyExists((string) $title)) {
             return null;
         }
 
@@ -196,29 +229,51 @@ class NotionIssueSyncService
             ?? NotionIssueMapper::mapSeverityToCode((string) ($row['root_cause'] ?? 'G'));
 
         $lines[] = "- {$title} ({$incidentDate->toDateString()}, {$severity})";
+        // This row is being imported — later rows with the same title must
+        // dedupe against it (the per-row DB lookup used to see it; the set must too).
+        $this->existingIssueTitles[\App\Helpers\StringHelper::normalizeForComparison((string) $title)] = true;
 
         if ($dryRun) {
             return new Incident;
         }
 
-        $incident = Incident::create([
-            'title' => NotionIssueMapper::cleanTitle((string) $title),
-            'incident_date' => $incidentDate,
-            'entry_date_tech_risk' => $incidentDate->format('Y-m-d'),
-            'severity' => $severity,
-            'classification' => IncidentClassification::Issue->value,
-            // NOT NULL "Area"/"Source" enums — the CSV importer leaves
-            // them unset (it only fills incident_type_id); Notion issues
-            // are internally tracked tech issues.
-            'incident_type' => 'Tech',
-            'incident_source' => 'Internal',
-            'incident_type_id' => IncidentType::first()?->id,
-            'no' => NotionIssueMapper::generateIssueId(),
-        ]);
+        // Atomic pair: a failed synced-page insert (unique page_id — the
+        // manual sync racing the cron) must not leave an orphan Incident.
+        $incident = DB::transaction(function () use ($title, $incidentDate, $severity, $pageId): Incident {
+            $incident = Incident::create([
+                'title' => NotionIssueMapper::cleanTitle((string) $title),
+                'incident_date' => $incidentDate,
+                'entry_date_tech_risk' => $incidentDate->format('Y-m-d'),
+                'severity' => $severity,
+                'classification' => IncidentClassification::Issue->value,
+                // NOT NULL "Area"/"Source" enums — the CSV importer leaves
+                // them unset (it only fills incident_type_id); Notion issues
+                // are internally tracked tech issues.
+                'incident_type' => 'Tech',
+                'incident_source' => 'Internal',
+                'incident_type_id' => IncidentType::first()?->id,
+                'no' => NotionIssueMapper::generateIssueId(),
+            ]);
 
-        NotionSyncedPage::create(['page_id' => $pageId, 'incident_id' => $incident->id]);
+            NotionSyncedPage::create(['page_id' => $pageId, 'incident_id' => $incident->id]);
+
+            return $incident;
+        });
 
         return $incident;
+    }
+
+    /**
+     * Duplicate check against the once-per-run title set. New imports join
+     * the set, so two identical rows inside one run still dedupe (same
+     * semantics the per-row lookup had). Per-instance, never static —
+     * long-lived FPM workers must not pin a run's set.
+     */
+    protected function titleAlreadyExists(string $title): bool
+    {
+        $this->existingIssueTitles ??= NotionIssueMapper::existingNormalizedTitles();
+
+        return isset($this->existingIssueTitles[\App\Helpers\StringHelper::normalizeForComparison($title)]);
     }
 
     /**
@@ -230,9 +285,11 @@ class NotionIssueSyncService
      * removal = delete the row in Notion); a failed lookup keeps it for the
      * next run. A page whose title already exists skips (restoring would
      * duplicate) and loses its tombstone so it is not retried every run.
+     * The tombstone delete + re-import run in ONE transaction — a throwing
+     * import rolls the delete back, so the restore promise never dies.
      *
      * @param  array<int, string>  $lines
-     * @return array{created: int, skipped: int}
+     * @return array{created: int, skipped: int, failed: int}
      */
     protected function recoverDeletedIssues(string $collectionUrl, array &$lines): array
     {
@@ -240,6 +297,7 @@ class NotionIssueSyncService
 
         $created = 0;
         $skipped = 0;
+        $failed = 0;
 
         foreach ($dangling as $page) {
             $row = $this->queryPageById($collectionUrl, $page->page_id);
@@ -255,17 +313,33 @@ class NotionIssueSyncService
                 continue;
             }
 
-            // Free the page ID first — importRow re-registers it.
-            NotionSyncedPage::where('page_id', $page->page_id)->whereNull('incident_id')->delete();
+            try {
+                $restored = DB::transaction(function () use ($page, $row, &$lines): bool {
+                    // Free the page ID first — importRow re-registers it.
+                    NotionSyncedPage::where('page_id', $page->page_id)->whereNull('incident_id')->delete();
 
-            if ($this->importRow($row, $page->page_id, false, $lines) !== null) {
+                    return $this->importRow($row, $page->page_id, false, $lines) !== null;
+                });
+            } catch (\Throwable $e) {
+                $failed++;
+
+                Log::warning('Notion issue sync: deleted-page re-import failed.', [
+                    'page_id' => $page->page_id,
+                    'error' => $e->getMessage(),
+                ]);
+                $lines[] = 'FAILED: '.($row['Name'] ?? $page->page_id).' — '.$e->getMessage();
+
+                continue;
+            }
+
+            if ($restored) {
                 $created++;
             } else {
                 $skipped++;
             }
         }
 
-        return ['created' => $created, 'skipped' => $skipped];
+        return ['created' => $created, 'skipped' => $skipped, 'failed' => $failed];
     }
 
     /**
@@ -329,9 +403,10 @@ class NotionIssueSyncService
 
     /**
      * Move the watermark to the newest row SEEN (created or skipped — both
-     * were handled) only after a fully successful run; a mid-run failure
-     * leaves it, so the next run re-reads and dedupe skips what already
-     * landed.
+     * were handled). Called with the rows BEFORE the first failure, so when
+     * any row failed the watermark stops there: everything from that row on
+     * is re-read next run — page-ID dedupe absorbs what already landed and
+     * the failed row retries once its data is fixed.
      */
     protected function advanceWatermark(array $rows): void
     {
