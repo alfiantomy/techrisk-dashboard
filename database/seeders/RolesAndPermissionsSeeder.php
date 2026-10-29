@@ -40,7 +40,7 @@ class RolesAndPermissionsSeeder extends Seeder
 
         // create roles and assign created permissions
         $role = Role::firstOrCreate(['name' => 'user']);
-        $role->givePermissionTo(['view incidents', 'view issues', 'view audit logs', 'access dashboard', 'view ai usage logs', 'access ai chat']);
+        $role->givePermissionTo(['view incidents', 'view issues', 'view audit logs', 'access dashboard', 'view dashboard widgets', 'view ai usage logs', 'access ai chat']);
 
         $role = Role::firstOrCreate(['name' => 'admin']);
         $role->givePermissionTo(Permission::all());

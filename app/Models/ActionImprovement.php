@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use OwenIt\Auditing\Contracts\Auditable;
 
 class ActionImprovement extends Model implements Auditable
@@ -15,7 +16,12 @@ class ActionImprovement extends Model implements Auditable
     use HasFactory;
     use \OwenIt\Auditing\Auditable;
 
-    /** Status lifecycle: draft (AI-suggested) → pending → done | cancelled. */
+    /**
+     * Status lifecycle: draft (AI-suggested) → pending → done | cancelled.
+     * 'tbd' ("TBD / to be discussed") is a parking state like draft/cancelled:
+     * no decision yet on whether/how to do it — excluded from reminders and
+     * every pending-gated metric. Distinct from due_date = null ("TBD" date).
+     */
     public const STATUS_DRAFT = 'draft';
 
     public const STATUS_PENDING = 'pending';
@@ -24,7 +30,9 @@ class ActionImprovement extends Model implements Auditable
 
     public const STATUS_CANCELLED = 'cancelled';
 
-    public const STATUSES = [self::STATUS_DRAFT, self::STATUS_PENDING, self::STATUS_DONE, self::STATUS_CANCELLED];
+    public const STATUS_TBD = 'tbd';
+
+    public const STATUSES = [self::STATUS_DRAFT, self::STATUS_PENDING, self::STATUS_DONE, self::STATUS_CANCELLED, self::STATUS_TBD];
 
     /** Priority — optional everywhere, default low (owner rule 2026-10-14). */
     public const PRIORITIES = ['low', 'medium', 'high', 'critical'];
@@ -44,6 +52,7 @@ class ActionImprovement extends Model implements Auditable
         'completed_at',
         'completed_by',
         'result_note',
+        'cancellation_reason',
         'escalation_level',
         'last_escalated_at',
     ];
@@ -69,6 +78,12 @@ class ActionImprovement extends Model implements Auditable
     public function completedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'completed_by');
+    }
+
+    /** Encrypted proof files attached to this action (uploadable anytime). */
+    public function evidence(): HasMany
+    {
+        return $this->hasMany(ActionImprovementEvidence::class);
     }
 
     /**

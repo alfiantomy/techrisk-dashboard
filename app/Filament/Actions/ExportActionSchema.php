@@ -188,6 +188,36 @@ class ExportActionSchema
     }
 
     /**
+     * The widgets' total-tile scope (owner rule 2026-10-23, amended
+     * 2026-10-27): delegate to Incident::excludedFromCounts() — the exact
+     * predicate the dashboard tile counts (null or not-excluded fund
+     * status; prod had one null row dropping every export to 38 vs the
+     * widget's 39). Delegating (not re-encoding the list) keeps the two
+     * surfaces from ever drifting apart again. An explicit f_fund_status
+     * pick bypasses this and stays strict.
+     */
+    public static function widgetFundScope(Builder $query): Builder
+    {
+        $query->excludedFromCounts();
+
+        return $query;
+    }
+
+    /**
+     * The baseline set for general surfaces (All Cases / Completed /
+     * quarter tabs, Custom, Executive data). Widget-aligned by default;
+     * an explicit Fund Status filter wins over the default (owner rule
+     * 2026-10-23). Dedicated fund-status tabs do NOT use this — they
+     * keep their own membership rows.
+     */
+    public static function baselineQuery(Builder $query, array $data): Builder
+    {
+        $baseline = $query->clone();
+
+        return empty($data['f_fund_status'] ?? []) ? self::widgetFundScope($baseline) : $baseline;
+    }
+
+    /**
      * Apply the optional export filters on top of the table's current filters.
      */
     public static function applyFilters(Builder $query, array $data): Builder

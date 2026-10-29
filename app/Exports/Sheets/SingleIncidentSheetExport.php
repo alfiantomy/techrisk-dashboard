@@ -10,6 +10,7 @@ use App\Enums\IncidentStatus;
 use App\Enums\IncidentType;
 use App\Enums\Severity;
 use App\Exports\Concerns\IdrFormat;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -23,6 +24,8 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents, WithHeadings, WithMapping, WithTitle
 {
+    use WritesSeverityFooter;
+
     private $query;
 
     private $title;
@@ -104,6 +107,11 @@ class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents
      * span/(n-1) — the dashboard widgets' Avg MTBF. The old Jan-1
      * dayOfYear anchor made the column mean ≠ every span-based number
      * next to it (owner report 2026-09-30).
+     *
+     * Based on the sheet's own (already export-filtered) query, so f_*
+     * filters scope the gaps too — excluded rows telescope over (owner
+     * report 2026-10-23). The classification/match() constraints below
+     * are idempotent re-applies of what the orchestrator already added.
      */
     private function computeMtbfForIncident($incident): ?int
     {
@@ -111,7 +119,8 @@ class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents
         $key = "export_{$this->title}_{$year}";
 
         if (! isset($this->mtbfCache[$key])) {
-            $query = \App\Models\Incident::whereYear('incident_date', $year)
+            $query = $this->query->clone()
+                ->whereYear('incident_date', $year)
                 ->whereIn('severity', Severity::METRIC_ELIGIBLE)
                 ->withoutOutliers()
                 ->orderBy('incident_date')->orderBy('id');
@@ -235,6 +244,9 @@ class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents
 
                 $summaryRange = "A{$summaryHeaderRow}:F{$summaryDataRow}";
                 $sheet->getStyle($summaryRange)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+
+                // Severity + MTTR + fund counts below the summary block.
+                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->query);
             },
         ];
     }

@@ -1519,12 +1519,12 @@ the target. Two surfaces, two implementations, silent divergence.
 
 | Metric | Count |
 |--------|-------|
-| Total Bugs | 27 |
+| Total Bugs | 29 |
 | Critical | 0 |
-| High | 19 |
-| Medium | 6 |
+| High | 20 |
+| Medium | 7 |
 | Low | 0 |
-| Resolved | 26 |
+| Resolved | 28 |
 | Open | 0 |
 
 ### Bug Trends by Component
@@ -1541,7 +1541,7 @@ the target. Two surfaces, two implementations, silent divergence.
 
 ---
 
-*Last Updated: 2026-10-05*
+*Last Updated: 2026-10-23*
 ### [BUG-028] - Netcore transport sent `type: plain` — every text-only email rejected with HTTP 400
 
 **Date:** 2026-10-08
@@ -1586,7 +1586,58 @@ types, so an API-contract violation passed CI.
 
 ---
 
-### [BUG-029] - Ultracode audit of the Notion sync feature: a poison-pill row wedged the unattended cron and orphaned Incidents, OAuth failures surfaced as raw 500s, and a dead refresh token still claimed "(auto-renews)"
+### [BUG-029] - Export filters scoped the rows but not the MTBF math
+
+**Date:** 2026-10-23
+**Discovered By:** Owner report — export All Cases tab shows Avg MTBF 3,826; the owner's hand-made sheet for Fund Status = Confirmed loss + Non fundLoss reads 7,64
+**Severity:** Medium
+**Status:** Resolved
+
+### Description
+Selecting `f_fund_status = [Confirmed loss, Non fundLoss]` in the export
+form filtered every Incident sheet's ROWS in all presets, but the MTBF
+columns and Avg MTBF footers kept using the unfiltered chain — gaps of
+1–3 days from Fully recovered / Non Tech Loss rows the owner excluded,
+so a "filtered" export read exactly like the unfiltered one (Avg MTBF
+3,8 instead of ~7,6).
+
+### Root Cause
+All three MTBF sequence implementations re-queried globally
+(`Incident::whereYear(...)` + fixed constraints) instead of deriving
+from the already-filtered builder the orchestrator handed the sheet:
+`ComputesMtbfSequence` (Custom + Quarterly Report) and
+`SingleIncidentSheetExport::computeMtbfForIncident()` (All Tabs). Rows
+and derived metrics had different data sources — the same surface-drift
+family as BUG-005/006/007, one layer up: not "one call site missed the
+rule" but "the rule was computed from a second, parallel query".
+
+### Fix
+- `ComputesMtbfSequence` gains `?Builder $mtbfScope` (null = legacy
+  global): sequence runs over the filtered builder, excluded rows
+  telescope over. Fed by `IncidentTableExport` (5th ctor arg) and
+  `QuarterlyCaseSheet` (3rd ctor arg, always the FULL filtered set —
+  never per-tab).
+- `SingleIncidentSheetExport` bases its per-tab sequence on its own
+  (already filtered) query; tab `match()` clauses re-apply idempotently.
+- Issues sheets untouched: their queries carry metric-membership clauses
+  (`whereNotNull('mtbf')`, `mttr >= 0`) that must never become a
+  sequence base.
+
+### Prevention
+- [x] Tests pin both sides: scoped export telescopes (C reads 20, not
+      10) AND no-scope construction keeps the legacy global behavior
+- [x] Tests assert footer Avg MTBF = scoped mean of column = scoped
+      span/(n−1), and that case tabs share the full-set sequence (not
+      per-tab gaps)
+- [x] Lesson: when a derived column is computed per-row, the "scope" is
+      whatever query the sequence is built from — if that query isn't
+      the one the user filtered, the filter is cosmetic. Derive metric
+      sequences from the handed filtered builder, or thread it in
+      explicitly.
+
+---
+
+### [BUG-030] - Ultracode audit of the Notion sync feature: a poison-pill row wedged the unattended cron and orphaned Incidents, OAuth failures surfaced as raw 500s, and a dead refresh token still claimed "(auto-renews)"
 
 **Date:** 2026-10-29
 **Discovered By:** Ultracode multi-agent audit (owner request: "lakukan pengecekan ulang, apakah fitur sync notion ini sudah baik dan benar") — 18 agents, 11 confirmed findings

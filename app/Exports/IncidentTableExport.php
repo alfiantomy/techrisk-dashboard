@@ -6,6 +6,8 @@ namespace App\Exports;
 
 use App\Exports\Concerns\ComputesMtbfSequence;
 use App\Exports\Concerns\IdrFormat;
+use App\Exports\Concerns\WritesSeverityFooter;
+use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromCollection;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -19,6 +21,7 @@ use PhpOffice\PhpSpreadsheet\Style\Fill; // Added
 class IncidentTableExport implements FromCollection, ShouldAutoSize, WithEvents, WithHeadings, WithMapping
 {
     use ComputesMtbfSequence;
+    use WritesSeverityFooter;
 
     protected $incidents;
 
@@ -28,12 +31,19 @@ class IncidentTableExport implements FromCollection, ShouldAutoSize, WithEvents,
 
     protected $columnNames;
 
-    public function __construct($incidents, $stats, $headings, $columnNames)
+    /**
+     * @param  Builder|null  $mtbfScope  the export's filtered query — the MTBF
+     *                                   sequence (column + bottom avg) must
+     *                                   telescope over rows the f_* filters
+     *                                   excluded, not the unfiltered chain.
+     */
+    public function __construct($incidents, $stats, $headings, $columnNames, ?Builder $mtbfScope = null)
     {
         $this->incidents = $incidents;
         $this->stats = $stats;
         $this->headings = $headings;
         $this->columnNames = $columnNames;
+        $this->mtbfScope = $mtbfScope;
     }
 
     public function collection()
@@ -164,6 +174,10 @@ class IncidentTableExport implements FromCollection, ShouldAutoSize, WithEvents,
                 // Add Borders to Summary
                 $summaryRange = "A{$summaryHeaderRow}:F{$summaryDataRow}";
                 $sheet->getStyle($summaryRange)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+
+                // Severity + MTTR + fund counts below the summary block —
+                // FromCollection, so counts come from the loaded collection.
+                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->incidents);
             },
         ];
     }

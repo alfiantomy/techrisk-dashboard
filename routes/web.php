@@ -47,6 +47,7 @@ use App\Http\Controllers\Ai\WarRoomShareController;
 use App\Http\Controllers\Ai\WarRoomShowController;
 use App\Http\Controllers\Ai\WarRoomSuggestAgentsController;
 use App\Http\Controllers\Ai\WarRoomTemplateController;
+use App\Http\Controllers\DownloadActionEvidenceController;
 use App\Http\Controllers\DownloadDocumentController;
 use App\Http\Controllers\WeeklyReportExportController;
 use App\Livewire\RequestAccessForm;
@@ -276,6 +277,10 @@ Route::get('/request-access', RequestAccessForm::class)->name('request-access');
 Route::get('/documents/{record}/download', DownloadDocumentController::class)
     ->middleware(['auth']) // Optional: Ensure only logged-in users can download
     ->name('documents.download');
+
+Route::get('/action-improvement-evidence/{record}/download', DownloadActionEvidenceController::class)
+    ->middleware(['auth'])
+    ->name('action-evidence.download');
 
 // API Documentation - Manual route for OpenAPI spec (Scribe auto-route may not work in production)
 Route::get('/docs.openapi', function () {

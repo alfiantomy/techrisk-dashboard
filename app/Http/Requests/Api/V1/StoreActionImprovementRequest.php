@@ -23,8 +23,9 @@ class StoreActionImprovementRequest extends ApiFormRequest
             'reminder' => ['boolean'],
             'reminder_frequency' => ['nullable', 'string'],
             'priority' => ['string', 'in:low,medium,high,critical'],
-            'status' => ['string', 'in:pending,done,cancelled'],
+            'status' => ['string', 'in:pending,done,cancelled,tbd'],
             'result_note' => ['nullable', 'string'],
+            'cancellation_reason' => ['nullable', 'string'],
         ];
     }
 }

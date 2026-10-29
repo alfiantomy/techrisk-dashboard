@@ -6,6 +6,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Actions\ActionImprovementFormSchema;
 use App\Filament\Resources\ActionImprovementResource\Pages;
+use App\Filament\Resources\ActionImprovementResource\RelationManagers;
 use App\Models\ActionImprovement;
 use App\Models\Incident;
 use Filament\Forms\Form;
@@ -177,6 +178,7 @@ class ActionImprovementResource extends Resource
                         ActionImprovement::STATUS_PENDING => 'Pending',
                         ActionImprovement::STATUS_DONE => 'Done',
                         ActionImprovement::STATUS_CANCELLED => 'Cancelled',
+                        ActionImprovement::STATUS_TBD => 'TBD (to be discussed)',
                     ]),
                 SelectFilter::make('priority')
                     ->options(array_combine(ActionImprovement::PRIORITIES, array_map('ucfirst', ActionImprovement::PRIORITIES))),
@@ -214,7 +216,9 @@ class ActionImprovementResource extends Resource
 
     public static function getRelations(): array
     {
-        return [];
+        return [
+            RelationManagers\EvidenceRelationManager::class,
+        ];
     }
 
     public static function getPages(): array

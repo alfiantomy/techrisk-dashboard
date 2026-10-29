@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Web;
 
+use App\Models\ActionImprovement;
+use App\Models\ActionImprovementEvidence;
+use App\Models\ActionImprovementEvidenceKey;
 use App\Models\EncryptionKey;
 use App\Models\Incident;
 use App\Models\InvestigationDocument;
@@ -263,6 +266,85 @@ class WebRouteTest extends TestCase
     }
 
     // ---------------------------------------------------------------
+    // GET /action-improvement-evidence/{record}/download  --  Evidence download
+    // ---------------------------------------------------------------
+
+    public function test_action_evidence_download_denies_unauthenticated_access(): void
+    {
+        $response = $this->get('/action-improvement-evidence/1/download');
+        $this->assertTrue(in_array($response->getStatusCode(), [302, 403, 500]));
+    }
+
+    public function test_action_evidence_download_returns_404_for_nonexistent_record(): void
+    {
+        $user = $this->createUserWithPermission('view incidents');
+
+        $response = $this->actingAs($user)->get('/action-improvement-evidence/99999/download');
+
+        $response->assertStatus(404);
+    }
+
+    public function test_action_evidence_download_returns_403_without_permission(): void
+    {
+        Storage::fake('public');
+        $user = User::factory()->create();
+        $evidence = $this->createEncryptedEvidence('proof.jpg');
+
+        $response = $this->actingAs($user)->get("/action-improvement-evidence/{$evidence->id}/download");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_action_evidence_download_returns_404_when_file_missing_from_disk(): void
+    {
+        Storage::fake('public');
+        $user = $this->createUserWithPermission('view incidents');
+
+        $action = ActionImprovement::factory()->create(['incident_id' => Incident::factory()->create()->id]);
+        $evidence = ActionImprovementEvidence::create([
+            'action_improvement_id' => $action->id,
+            'file_path' => 'action-evidence/nonexistent.jpg',
+            'original_filename' => 'nonexistent.jpg',
+        ]);
+
+        $response = $this->actingAs($user)->get("/action-improvement-evidence/{$evidence->id}/download");
+
+        $response->assertStatus(404);
+    }
+
+    public function test_action_evidence_download_returns_500_when_encryption_key_missing(): void
+    {
+        Storage::fake('public');
+        $user = $this->createUserWithPermission('view incidents');
+
+        $action = ActionImprovement::factory()->create(['incident_id' => Incident::factory()->create()->id]);
+        $evidence = ActionImprovementEvidence::create([
+            'action_improvement_id' => $action->id,
+            'file_path' => 'action-evidence/proof.jpg',
+            'original_filename' => 'proof.jpg',
+        ]);
+        Storage::disk('public')->put('action-evidence/proof.jpg', 'dummy content');
+
+        $response = $this->actingAs($user)->get("/action-improvement-evidence/{$evidence->id}/download");
+
+        $response->assertStatus(500);
+    }
+
+    public function test_action_evidence_download_succeeds_for_user_with_view_permission(): void
+    {
+        Storage::fake('public');
+        $user = $this->createUserWithPermission('view incidents');
+
+        $evidence = $this->createEncryptedEvidence('fix_proof.png');
+
+        $response = $this->actingAs($user)->get("/action-improvement-evidence/{$evidence->id}/download");
+
+        $response->assertStatus(200);
+        $response->assertHeader('Content-Disposition');
+        $this->assertSame('Content of fix_proof.png', $response->streamedContent());
+    }
+
+    // ---------------------------------------------------------------
     // GET /admin/weekly-report/export/{year}  --  Weekly report export
     // ---------------------------------------------------------------
 
@@ -354,6 +436,36 @@ class WebRouteTest extends TestCase
         Storage::disk('public')->put($filePath, $encryptedContent);
 
         return $document;
+    }
+
+    private function createEncryptedEvidence(string $filename, ?Incident $incident = null): ActionImprovementEvidence
+    {
+        $encryptionService = app(EncryptionService::class);
+        $filePath = "action-evidence/{$filename}";
+        $incident ??= Incident::factory()->create();
+
+        $action = ActionImprovement::factory()->create(['incident_id' => $incident->id]);
+        $evidence = ActionImprovementEvidence::create([
+            'action_improvement_id' => $action->id,
+            'file_path' => $filePath,
+            'original_filename' => $filename,
+        ]);
+
+        $key = $encryptionService->generateKey();
+        $salt = $encryptionService->generateSalt();
+        $finalKey = $encryptionService->getFinalKey($key, $salt, 'method1');
+
+        ActionImprovementEvidenceKey::create([
+            'action_improvement_evidence_id' => $evidence->id,
+            'key' => $key,
+            'salt' => $salt,
+            'method' => 'method1',
+        ]);
+
+        $encryptedContent = $encryptionService->encrypt("Content of {$filename}", $finalKey);
+        Storage::disk('public')->put($filePath, $encryptedContent);
+
+        return $evidence;
     }
 
     private function ensureScribeDir(): void

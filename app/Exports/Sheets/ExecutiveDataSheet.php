@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Exports\Sheets;
 
 use App\Exports\Concerns\IdrFormat;
+use App\Exports\Concerns\WritesSeverityFooter;
 use Illuminate\Database\Eloquent\Builder;
 use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
@@ -19,6 +20,8 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class ExecutiveDataSheet implements FromQuery, ShouldAutoSize, WithEvents, WithHeadings, WithMapping, WithTitle
 {
+    use WritesSeverityFooter;
+
     protected Builder $query;
 
     public function __construct(Builder $query)
@@ -87,6 +90,9 @@ class ExecutiveDataSheet implements FromQuery, ShouldAutoSize, WithEvents, WithH
                 // currency columns H:J
                 $sheet->getStyle("H2:J{$last}")->getNumberFormat()
                     ->setFormatCode(IdrFormat::FORMAT);
+
+                // Severity + MTTR + fund counts below the rows.
+                $this->writeSeverityFooter($sheet, $last + 2, $this->query);
             },
         ];
     }

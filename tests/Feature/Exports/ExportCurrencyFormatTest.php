@@ -151,8 +151,9 @@ class ExportCurrencyFormatTest extends TestCase
         $this->assertIdrCell($sheet, 'C2', 100000.0);
         $this->assertIdrCell($sheet, 'D2', 50000.0);
 
-        // Summary block: D/E/F of the summary data row (last row of the sheet).
-        $summaryDataRow = $sheet->getHighestDataRow();
+        // Summary block: D/E/F of the summary data row (the 2 severity
+        // banner rows sit below it — summary = highest − 3).
+        $summaryDataRow = $sheet->getHighestDataRow() - 3;
         $this->assertIdrCell($sheet, "D{$summaryDataRow}", 1234567.0);
         $this->assertIdrCell($sheet, "E{$summaryDataRow}", 100000.0);
         $this->assertIdrCell($sheet, "F{$summaryDataRow}", 50000.0);

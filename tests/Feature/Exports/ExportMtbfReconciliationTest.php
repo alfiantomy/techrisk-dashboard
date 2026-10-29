@@ -66,7 +66,7 @@ class ExportMtbfReconciliationTest extends TestCase
         // Bottom Avg MTBF (3rd summary cell of the last row) = mean of the
         // displayed numeric cells: (20 + 25) / 2 = 22.5 — also exactly the
         // widgets' span/(n-1) for this set. Manual averaging now passes.
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(22.5, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -90,7 +90,7 @@ class ExportMtbfReconciliationTest extends TestCase
         $this->assertSame(20, $sheet->getCell('B3')->getValue());
         $this->assertSame(25, $sheet->getCell('B4')->getValue());
 
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(22.5, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -106,7 +106,7 @@ class ExportMtbfReconciliationTest extends TestCase
 
         // One incident = no gap exists: column '-', bottom 0.
         $this->assertSame('-', $sheet->getCell('B2')->getValue());
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame(0.0, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
     }
 
@@ -128,7 +128,7 @@ class ExportMtbfReconciliationTest extends TestCase
 
         // Bottom "Average MTBF" value (label col A, value col B, last row) =
         // mean of the displayed numeric cells: (20 + 25) / 2 = 22.5.
-        $this->assertSame(22.5, (float) $sheet->getCell('B'.$sheet->getHighestDataRow())->getValue());
+        $this->assertSame(22.5, (float) $sheet->getCell('B'.($sheet->getHighestDataRow() - 3))->getValue());
     }
 
     public function test_mtbf_sequence_is_not_stale_across_instances(): void
@@ -155,6 +155,40 @@ class ExportMtbfReconciliationTest extends TestCase
         $this->assertSame(25, $sheet->getCell('B4')->getValue());
     }
 
+    public function test_all_tabs_sequence_honors_the_export_filters(): void
+    {
+        // Owner report 2026-10-23: rows were already filtered, but the MTBF
+        // sequence re-queried globally — the All Cases tab read like the
+        // unfiltered chain. Scoped to Confirmed loss + Non fundLoss (the
+        // owner's sheet recipe) the gaps must telescope over excluded rows.
+        Incident::factory()->createQuietly(['classification' => 'Incident', 'severity' => 'P1', 'fund_status' => 'Confirmed loss', 'incident_date' => '2032-01-10 10:00']);
+        Incident::factory()->createQuietly(['classification' => 'Incident', 'severity' => 'P1', 'fund_status' => 'Fully recovered', 'incident_date' => '2032-01-20 10:00']);
+        Incident::factory()->createQuietly(['classification' => 'Incident', 'severity' => 'P2', 'fund_status' => 'Confirmed loss', 'incident_date' => '2032-01-30 10:00']);
+
+        $filtered = Incident::query()
+            ->whereIn('severity', ['P1', 'P2'])
+            ->whereIn('fund_status', [\App\Enums\FundStatus::ConfirmedLoss->value, \App\Enums\FundStatus::NonFundLoss->value])
+            ->orderBy('incident_date');
+
+        $sheet = $this->store(new SingleIncidentSheetExport($filtered, 'All Cases', ['Title', 'MTBF (days)'], ['title', 'mtbf']), 't-mtbf-scoped.xlsx');
+
+        // The Fully recovered row is out of both the sheet and the sequence:
+        // '-' then 20 (Jan 10 → Jan 30), not the unfiltered 10.
+        $this->assertSame('-', $sheet->getCell('B2')->getValue());
+        $this->assertSame(20, $sheet->getCell('B3')->getValue());
+
+        // Bottom Avg MTBF follows the scoped column: mean of [20] = 20 —
+        // also scoped span/(n-1). (Unfiltered chain would read 10.)
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
+        $this->assertSame(20.0, (float) $sheet->getCell("C{$summaryDataRow}")->getValue());
+
+        // The orchestrator (All Tabs preset) hands each sheet the filtered
+        // query — first sheet is All Cases and must carry the same scoping.
+        $allTabs = (new \App\Exports\MultiSheetIncidentsExport($filtered, ['Title', 'MTBF (days)'], ['title', 'mtbf']))->sheets();
+        $latest = Incident::with('labels')->orderBy('incident_date', 'desc')->first();
+        $this->assertSame(20, $allTabs[0]->map($latest)[1]);
+    }
+
     public function test_all_day_based_mttr_tab_shows_dash_average(): void
     {
         // Fund-loss style rows: mttr stored negative (days). No positive
@@ -165,7 +199,7 @@ class ExportMtbfReconciliationTest extends TestCase
         $query = Incident::query()->orderBy('incident_date');
         $sheet = $this->store(new SingleIncidentSheetExport($query, 'Fund Loss', ['Title', 'MTTR (mins)'], ['title', 'mttr']), 't-mttr-days.xlsx');
 
-        $summaryDataRow = $sheet->getHighestDataRow();
+        $summaryDataRow = ($sheet->getHighestDataRow() - 3);
         $this->assertSame('-', (string) $sheet->getCell("B{$summaryDataRow}")->getValue());
     }
 }
