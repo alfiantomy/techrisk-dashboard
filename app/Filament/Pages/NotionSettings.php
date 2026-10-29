@@ -8,7 +8,9 @@ use App\Filament\Actions\NotionSyncAction;
 use App\Models\Setting;
 use App\Services\Notion\NotionIssueSyncService;
 use App\Services\Notion\NotionMcpClient;
-use Filament\Actions\Action;
+use Filament\Actions\Action as HeaderAction;
+use Filament\Forms\Components\Actions;
+use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -18,11 +20,13 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\HtmlString;
 
 /**
  * Notion connection settings: the workspace-wide MCP connection (OAuth via
  * laravel/mcp account linking) and the scheduled sub-page sync watch target.
- * The connection and sync buttons live in the page header.
+ * The connection buttons live in the page header; the sync buttons live
+ * inside the "Sync issue from Notion" section (owner 2026-10-29).
  */
 class NotionSettings extends Page implements HasForms
 {
@@ -55,13 +59,13 @@ class NotionSettings extends Page implements HasForms
     protected function getHeaderActions(): array
     {
         return [
-            Action::make('connect')
-                ->label(app(NotionMcpClient::class)->connected() ? 'Reconnect Notion' : 'Connect Notion')
+            HeaderAction::make('connect')
+                ->label($this->connectButtonLabel())
                 ->icon('heroicon-m-arrow-top-right-on-square')
                 ->color('primary')
                 ->url(route('mcp.oauth.notion.connect')),
 
-            Action::make('disconnect')
+            HeaderAction::make('disconnect')
                 ->label('Disconnect')
                 ->icon('heroicon-m-x-mark')
                 ->color('danger')
@@ -72,45 +76,80 @@ class NotionSettings extends Page implements HasForms
 
                     Notification::make()->success()->title('Notion disconnected')->send();
                 }),
-
-            Action::make('previewSync')
-                ->label('Preview')
-                ->icon('heroicon-o-eye')
-                ->color('gray')
-                ->action(fn () => NotionSyncAction::preview()),
-
-            Action::make('syncNow')
-                ->label('Sync now')
-                ->icon('heroicon-m-arrow-path')
-                ->form(NotionSyncAction::form())
-                ->action(fn (array $data) => NotionSyncAction::run(restoreDeleted: (bool) ($data['restoreDeleted'] ?? false))),
         ];
+    }
+
+    /**
+     * Owner 2026-10-29: "Connect" before any connection, "Reconnect" once a
+     * token exists — a failed refresh keeps the stored token, so the problem
+     * states stay on "Reconnect".
+     */
+    public function connectButtonLabel(): string
+    {
+        return app(NotionMcpClient::class)->connected() ? 'Reconnect' : 'Connect';
+    }
+
+    /**
+     * The four connection states, machine-readable — connectionStatus()
+     * turns each into its message and connectionStatusHtml() adds the
+     * color coding (green+bold healthy, red broken, amber renewal pending).
+     */
+    public function connectionState(): string
+    {
+        $client = app(NotionMcpClient::class);
+
+        if (! $client->connected()) {
+            return 'not_connected';
+        }
+
+        if ($client->needsReconnect()) {
+            return 'reconnect_required';
+        }
+
+        $expiresAt = $client->tokenExpiresAt();
+
+        if ($expiresAt !== null && $expiresAt <= time()) {
+            return 'renewal_pending';
+        }
+
+        return 'connected';
     }
 
     public function connectionStatus(): string
     {
         $client = app(NotionMcpClient::class);
 
-        if (! $client->connected()) {
+        if ($this->connectionState() === 'not_connected') {
             return 'Not connected — AI chat Notion tools and the sub-page sync are inactive.';
         }
 
-        if ($client->needsReconnect()) {
+        if ($this->connectionState() === 'reconnect_required') {
             return 'Reconnect required — the token could not be renewed (the refresh token may have been revoked in Notion). AI chat Notion tools and the sub-page sync are failing until an admin clicks Connect Notion.';
         }
 
         $expiresAt = $client->tokenExpiresAt();
 
-        if ($expiresAt !== null && $expiresAt <= time()) {
-            // Expired and not yet successfully re-newed — do not claim renewal.
-            return 'Connected — token expired '.now()->setTimestamp($expiresAt)->diffForHumans().'; renewal pending. If calls keep failing, click Connect Notion.';
+        // Expired and not yet successfully re-newed — do not claim renewal.
+        if ($this->connectionState() === 'renewal_pending') {
+            return 'Connected — token expired '.now()->setTimestamp((int) $expiresAt)->diffForHumans().'; renewal pending. If calls keep failing, click Connect Notion.';
         }
 
         $expiry = $expiresAt
-            ? ' Access token expires '.now()->setTimestamp($expiresAt)->diffForHumans().' (auto-renews).'
+            ? ' Access token expires '.now()->setTimestamp((int) $expiresAt)->diffForHumans().' (auto-renews).'
             : '';
 
         return 'Connected — AI chat can search, read, and write Notion.'.$expiry;
+    }
+
+    public function connectionStatusHtml(): HtmlString
+    {
+        $classes = match ($this->connectionState()) {
+            'not_connected', 'reconnect_required' => 'font-semibold text-danger-600',
+            'renewal_pending' => 'font-semibold text-warning-600',
+            default => 'font-bold text-success-600',
+        };
+
+        return new HtmlString('<span class="'.e($classes).'">'.e($this->connectionStatus()).'</span>');
     }
 
     public function lastSyncStatus(): string
@@ -133,7 +172,7 @@ class NotionSettings extends Page implements HasForms
                     ->schema([
                         Placeholder::make('status')
                             ->label('Status')
-                            ->content(fn (NotionSettings $livewire): string => $livewire->connectionStatus())
+                            ->content(fn (NotionSettings $livewire): HtmlString => $livewire->connectionStatusHtml())
                             ->columnSpanFull(),
 
                         Placeholder::make('last_sync')
@@ -150,6 +189,20 @@ class NotionSettings extends Page implements HasForms
                             ->placeholder('e.g. 1f2e3d4c5b6a... or the page URL')
                             ->helperText('Copy the ID or URL from the Notion page/database to watch. Accepts a full URL or a raw ID.')
                             ->columnSpanFull(),
+
+                        Actions::make([
+                            Action::make('syncNow')
+                                ->label('Sync now')
+                                ->icon('heroicon-m-arrow-path')
+                                ->form(NotionSyncAction::form())
+                                ->action(fn (array $data) => NotionSyncAction::run(restoreDeleted: (bool) ($data['restoreDeleted'] ?? false))),
+
+                            Action::make('previewSync')
+                                ->label('Preview')
+                                ->icon('heroicon-o-eye')
+                                ->color('gray')
+                                ->action(fn () => NotionSyncAction::preview()),
+                        ]),
                     ]),
             ])
             ->statePath('data');

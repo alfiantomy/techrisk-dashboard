@@ -73,10 +73,11 @@ class NotionSyncAction
     }
 
     /**
-     * The shared Sync-now modal: the full-sync checkbox plus a warning that
-     * only appears once it is ticked, so the operator confirms they really
-     * want every deleted issue back (full sync is all-or-nothing — it also
-     * resurrects duplicates deleted on purpose).
+     * The Sync-now modal (Notion Settings page only — the Issue-list button
+     * is normal-sync-only per owner 2026-10-29): the full-sync checkbox plus
+     * a warning that only appears once it is ticked, so the operator
+     * confirms they really want every deleted issue back (full sync is
+     * all-or-nothing — it also resurrects duplicates deleted on purpose).
      */
     public static function form(): array
     {

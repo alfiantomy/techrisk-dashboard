@@ -11,9 +11,11 @@ use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 /**
- * The Notion Settings page's sync buttons ride the shared NotionSyncAction:
- * "Sync now" carries the full-sync checkbox (normal sync by default), and
- * "Preview" runs the read-only dry run of the full sync.
+ * The Notion Settings page's sync buttons live INSIDE the "Sync issue from
+ * Notion" section (owner 2026-10-29), not in the page header: "Sync now"
+ * carries the full-sync checkbox (normal sync by default) and "Preview"
+ * runs the read-only dry run of the full sync. They are form-component
+ * actions — the header holds only the connection buttons.
  */
 class NotionSettingsSyncButtonsTest extends TestCase
 {
@@ -26,7 +28,7 @@ class NotionSettingsSyncButtonsTest extends TestCase
             ->andReturn(['status' => 'ok', 'message' => 'No new issues.', 'created' => 0, 'skipped' => 0, 'preview' => null]);
 
         $this->settingsPage()
-            ->callAction('syncNow')
+            ->callFormComponentAction('syncNowAction', 'syncNow')
             ->assertNotified('No new issues.');
     }
 
@@ -37,7 +39,7 @@ class NotionSettingsSyncButtonsTest extends TestCase
             ->andReturn(['status' => 'ok', 'message' => 'Imported 1 issue(s).', 'created' => 1, 'skipped' => 0, 'preview' => null]);
 
         $this->settingsPage()
-            ->callAction('syncNow', data: ['restoreDeleted' => true])
+            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true])
             ->assertNotified('Imported 1 issue(s).');
     }
 
@@ -48,8 +50,15 @@ class NotionSettingsSyncButtonsTest extends TestCase
             ->andReturn(['status' => 'ok', 'message' => 'Would import 2 issue(s); 1 already synced/duplicate/blank.', 'created' => 2, 'skipped' => 1, 'preview' => "- Brand new row (2026-07-01, P3)\n- Duplicate title (already in the dashboard): Already there"]);
 
         $this->settingsPage()
-            ->callAction('previewSync')
+            ->callFormComponentAction('previewSyncAction', 'previewSync')
             ->assertNotified();
+    }
+
+    public function test_the_sync_buttons_are_not_page_header_actions(): void
+    {
+        $this->settingsPage()
+            ->assertActionDoesNotExist('syncNow')
+            ->assertActionDoesNotExist('previewSync');
     }
 
     private function settingsPage()
