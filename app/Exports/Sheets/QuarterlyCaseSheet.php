@@ -137,7 +137,7 @@ class QuarterlyCaseSheet implements FromQuery, ShouldAutoSize, WithColumnFormatt
 
                 // Severity + MTTR + fund counts below the pinned footer row
                 // (tests pin A6/D7 — these go strictly underneath).
-                $this->writeSeverityFooter($sheet, $footerRow + 1, $this->query);
+                $this->writeSeverityFooter($sheet, $footerRow + 1, $this->query, $avgMtbf);
             },
         ];
     }

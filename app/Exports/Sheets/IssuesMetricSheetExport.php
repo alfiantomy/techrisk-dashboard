@@ -160,7 +160,7 @@ class IssuesMetricSheetExport implements FromQuery, ShouldAutoSize, WithEvents, 
                 $sheet->getStyle($summaryRange)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
                 // Severity + MTTR + fund counts below the two-row summary.
-                $this->writeSeverityFooter($sheet, $summaryStartRow + 3, $this->query);
+                $this->writeSeverityFooter($sheet, $summaryStartRow + 3, $this->query, $this->metricType === 'mtbf' ? $metricValue : null);
             },
         ];
     }

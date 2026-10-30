@@ -246,7 +246,7 @@ class SingleIncidentSheetExport implements FromQuery, ShouldAutoSize, WithEvents
                 $sheet->getStyle($summaryRange)->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
 
                 // Severity + MTTR + fund counts below the summary block.
-                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->query);
+                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->query, $this->stats['avgMtbf']);
             },
         ];
     }

@@ -84,7 +84,7 @@ class SeverityFooterTest extends TestCase
         // Minutes bucket = (60+30+60+60)/4 = 52.5 — the varied 30 pins
         // membership; days bucket = |−3| = 3 must NOT pollute it (would be
         // 45). Fund 3 / Non-Fund 1.
-        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A10')->getValue());
+        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Avg MTBF (days): 10.25 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A10')->getValue());
         // The banners are merged across the table width (12 fixed columns
         // → L), not one cell per table column.
         $this->assertContains('A9:L9', $data->getMergeCells());
@@ -99,9 +99,11 @@ class SeverityFooterTest extends TestCase
             ->getSheetByName('Fund Loss');
 
         // 3 data rows → Total Cases at 6 → banners 7/8. Minutes avg is the
-        // tab's own two 60s — P2's 30 is not on this tab.
+        // tab's own two 60s — P2's 30 is not on this tab. MTBF 13 = the
+        // tab's rows reading gaps off the BASELINE chain (01-25→01-20 = 5,
+        // 02-20→01-30 = 21; 26/2) — sequence semantics, not per-tab gaps.
         $this->assertSame('P1: 3 | P2: 0 | P3: 0 | P4: 0 | X1: 0 | X2: 0 | X3: 0 | X4: 0', $data->getCell('A7')->getValue());
-        $this->assertSame('Avg MTTR (mins): 60 | Avg MTTR (days): 3 | Fund Loss: 3 | Non Fund Loss: 0', $data->getCell('A8')->getValue());
+        $this->assertSame('Avg MTTR (mins): 60 | Avg MTTR (days): 3 | Avg MTBF (days): 13 | Fund Loss: 3 | Non Fund Loss: 0', $data->getCell('A8')->getValue());
     }
 
     public function test_all_tabs_all_cases_banner_below_summary_block(): void
@@ -113,7 +115,7 @@ class SeverityFooterTest extends TestCase
         $data = $this->render($export)->getSheetByName('All Cases');
 
         $this->assertSame('P1: 3 | P2: 1 | P3: 0 | P4: 0 | X1: 0 | X2: 1 | X3: 0 | X4: 0', $data->getCell('A12')->getValue());
-        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A13')->getValue());
+        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Avg MTBF (days): 10.25 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A13')->getValue());
     }
 
     public function test_group_by_category_sheet_has_banner(): void
@@ -128,6 +130,8 @@ class SeverityFooterTest extends TestCase
         // 6 rows share Core Payment (JSON membership — the excluded P3 too):
         // header 1 + 6 → banners 9/10. Minutes = (60+30+60+60+60)/5 = 54.
         $this->assertSame('P1: 3 | P2: 1 | P3: 1 | P4: 0 | X1: 0 | X2: 1 | X3: 0 | X4: 0', $data->getCell('A9')->getValue());
+        // No MTBF segment here — PerCategorySheet is a stored-metric sheet; its
+        // group averages live on the GroupSummary front sheet.
         $this->assertSame('Avg MTTR (mins): 54 | Avg MTTR (days): 3 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A10')->getValue());
     }
 
@@ -146,7 +150,7 @@ class SeverityFooterTest extends TestCase
 
         $r = $data->getHighestDataRow() - 1; // stats banner = last row
         $this->assertSame('P1: 1 | P2: 0 | P3: 0 | P4: 0 | X1: 0 | X2: 0 | X3: 0 | X4: 0', $data->getCell("A{$r}")->getValue());
-        $this->assertSame('Avg MTTR (mins): - | Avg MTTR (days): 3 | Fund Loss: 1 | Non Fund Loss: 0', $data->getCell('A'.($r + 1))->getValue());
+        $this->assertSame('Avg MTTR (mins): - | Avg MTTR (days): 3 | Avg MTBF (days): 0 | Fund Loss: 1 | Non Fund Loss: 0', $data->getCell('A'.($r + 1))->getValue());
     }
 
     public function test_custom_preset_banner_counts_from_collection(): void
@@ -160,9 +164,11 @@ class SeverityFooterTest extends TestCase
         $export = new IncidentTableExport($incidents, $stats, ['Title', 'MTBF (days)'], ['title', 'mtbf']);
         $data = $this->render($export)->getSheet(0);
 
-        // 5 data rows: summary values at 10 → banners 12/13.
+        // 5 data rows: summary values at 10 → banners 12/13. MTBF 7.5:
+        // no mtbfScope ctor arg → legacy GLOBAL chain (P3 included,
+        // 02-20 telescopes to 10): 10+5+5+10 / 4.
         $this->assertSame('P1: 3 | P2: 1 | P3: 0 | P4: 0 | X1: 0 | X2: 1 | X3: 0 | X4: 0', $data->getCell('A12')->getValue());
-        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A13')->getValue());
-        $this->assertContains('A12:H12', $data->getMergeCells(), 'narrow sheet merges to the min-H floor');
+        $this->assertSame('Avg MTTR (mins): 52.5 | Avg MTTR (days): 3 | Avg MTBF (days): 7.5 | Fund Loss: 3 | Non Fund Loss: 1', $data->getCell('A13')->getValue());
+        $this->assertContains('A12:L12', $data->getMergeCells(), 'narrow sheet merges to the min-L floor — the ~95-char stats line must fit');
     }
 }
