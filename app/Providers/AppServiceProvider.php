@@ -83,7 +83,10 @@ class AppServiceProvider extends ServiceProvider
         // sub-page sync. The token closure resolves lazily per request/job;
         // NotionMcpClient handles refresh behind it.
         Mcp::registerClient('notion', fn () => Client::web(config('notion.mcp_url'))
-            ->withOAuth()
+            // Static client_id (notion.oauth.*) when set — prod's VPN-only
+            // domain can't serve the client-metadata-document flow; unset
+            // locally, where the automatic registration path still works.
+            ->withOAuth(config('notion.oauth.client_id'), config('notion.oauth.client_secret'))
             ->withToken(fn () => app(NotionMcpClient::class)->accessToken())
             ->withTimeout((float) config('notion.timeout', 60)));
 

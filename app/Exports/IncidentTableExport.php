@@ -177,7 +177,7 @@ class IncidentTableExport implements FromCollection, ShouldAutoSize, WithEvents,
 
                 // Severity + MTTR + fund counts below the summary block —
                 // FromCollection, so counts come from the loaded collection.
-                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->incidents);
+                $this->writeSeverityFooter($sheet, $summaryDataRow + 2, $this->incidents, $avgMtbf);
             },
         ];
     }
