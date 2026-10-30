@@ -53,6 +53,12 @@ class NotionSettings extends Page implements HasForms
 
     public ?string $watchIdError = null;
 
+    // The full-sync restore picker's options (owner 2026-10-30), memoized:
+    // each option is a Notion page lookup, and Filament re-evaluates schema
+    // closures on every Livewire render — the memo keeps that to one fan-out
+    // per page load instead of one per checkbox tick.
+    public ?array $restorableIssueOptionsCache = null;
+
     public static function canAccess(): bool
     {
         return Auth::check() && Auth::user()->can('manage api tokens');
@@ -191,7 +197,7 @@ class NotionSettings extends Page implements HasForms
                     ]),
 
                 Section::make('Sync issue from Notion')
-                    ->description('Runs at 09:00, 12:00, 15:00, and 18:00 (WIB): new sub-pages import as Issues (dedupe by Notion page ID and title, against Issues and Incidents). Deleting an imported issue from the dashboard is permanent — only "Sync now" with "Full sync" restores deleted issues. Use "Preview" for a read-only dry run first.')
+                    ->description('Runs at 09:00, 12:00, 15:00, and 18:00 (WIB): new sub-pages import as Issues (dedupe by Notion page ID and title, against Issues and Incidents). Deleting an imported issue from the dashboard is permanent — only "Sync now" with "Full sync" brings deleted issues back, and only the ones you pick there. Use "Preview" for a read-only dry run first.')
                     ->schema([
                         // Owner 2026-10-30: the ID changes only through the
                         // explicit Change → Save flow below, never by typing
@@ -272,25 +278,48 @@ class NotionSettings extends Page implements HasForms
                                 ->label('Sync now')
                                 ->icon('heroicon-m-arrow-path')
                                 ->form(NotionSyncAction::form())
-                                ->action(fn (array $data) => NotionSyncAction::run(restoreDeleted: (bool) ($data['restoreDeleted'] ?? false))),
+                                ->action(function (array $data): void {
+                                    $full = (bool) ($data['restoreDeleted'] ?? false);
+
+                                    // A full sync restores ONLY the picked pages —
+                                    // an empty pick is a deliberate restore-nothing
+                                    // (owner 2026-10-30); a normal sync ignores it.
+                                    NotionSyncAction::run(
+                                        restoreDeleted: $full,
+                                        restorePageIds: $full ? array_values((array) ($data['restorePageIds'] ?? [])) : null,
+                                    );
+                                }),
 
                             Action::make('previewSync')
                                 ->label('Preview')
                                 ->icon('heroicon-o-eye')
                                 ->color('gray')
-                                // Owner 2026-10-30: the dry run opens a
-                                // centered modal (scrollable list, one finding
-                                // per line) — Close, or "Continue full sync"
-                                // to run for real what was just previewed.
+                                // Owner 2026-10-30: the dry run opens a centered
+                                // modal (scrollable list, one finding per line) —
+                                // read-only, Close only. The real run goes through
+                                // "Sync now" and its restore picker; "Continue full
+                                // sync" restored everything, exactly what the picker
+                                // exists to prevent.
                                 ->modalHeading('Preview (dry run) — nothing was imported')
                                 ->modalContent(fn (): \Illuminate\Contracts\View\View => NotionSyncAction::previewModalContent())
-                                ->modalSubmitActionLabel('Continue full sync')
-                                ->modalCancelActionLabel('Close')
-                                ->action(fn () => NotionSyncAction::run(restoreDeleted: true)),
+                                ->modalSubmitAction(false)
+                                ->modalCancelActionLabel('Close'),
                         ]),
                     ]),
             ])
             ->statePath('data');
+    }
+
+    /**
+     * The full-sync restore picker's options, computed once per page load —
+     * each option is a Notion page lookup, and the modal's schema closures
+     * re-run on every Livewire render.
+     *
+     * @return array<string, string> Notion page ID => "{title} ({date}, {severity})"
+     */
+    public function restorableIssueOptions(): array
+    {
+        return $this->restorableIssueOptionsCache ??= app(NotionIssueSyncService::class)->restorableIssues();
     }
 
     /**

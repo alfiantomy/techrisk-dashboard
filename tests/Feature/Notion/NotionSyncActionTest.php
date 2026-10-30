@@ -5,23 +5,25 @@ namespace Tests\Feature\Notion;
 use App\Filament\Actions\NotionSyncAction;
 use App\Services\Notion\NotionIssueSyncService;
 use Filament\Forms\Components\Checkbox;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Placeholder;
 use Illuminate\Support\Collection;
 use Tests\TestCase;
 
 /**
  * The shared sync runner: "Sync now" on both surfaces passes the full-sync
- * flag through to the service. The Preview button opens a MODAL (owner
- * 2026-10-30): the dry run of the full sync renders there — one finding per
- * line, scrollable — with "Close" and "Continue full sync" in the footer;
- * it is no longer a toast.
+ * flag and the restore pick through to the service. The Preview button opens
+ * a MODAL (owner 2026-10-30): the read-only dry run of the full sync renders
+ * there — one finding per line, scrollable — with Close in the footer (the
+ * real run goes through "Sync now" and its restore picker, owner
+ * 2026-10-30); it is no longer a toast.
  */
 class NotionSyncActionTest extends TestCase
 {
     public function test_run_defaults_to_a_normal_sync(): void
     {
         $this->mock(NotionIssueSyncService::class)
-            ->shouldReceive('sync')->once()->with(false, false)
+            ->shouldReceive('sync')->once()->with(false, false, null)
             ->andReturn(['status' => 'ok', 'message' => 'No new issues.', 'created' => 0, 'skipped' => 0, 'preview' => null]);
 
         NotionSyncAction::run();
@@ -32,10 +34,23 @@ class NotionSyncActionTest extends TestCase
     public function test_run_passes_the_full_sync_flag_to_the_service(): void
     {
         $this->mock(NotionIssueSyncService::class)
-            ->shouldReceive('sync')->once()->with(false, true)
+            ->shouldReceive('sync')->once()->with(false, true, null)
             ->andReturn(['status' => 'ok', 'message' => 'Imported 1 issue(s).', 'created' => 1, 'skipped' => 0, 'preview' => null]);
 
         NotionSyncAction::run(restoreDeleted: true);
+
+        $this->assertSame('Imported 1 issue(s).', $this->sentToasts()->first()['title']);
+    }
+
+    public function test_run_passes_the_restore_pick_to_the_service(): void
+    {
+        // The picker's selection — even an empty one — is the operator's
+        // explicit pick; only null (no picker involved) means restore-all.
+        $this->mock(NotionIssueSyncService::class)
+            ->shouldReceive('sync')->once()->with(false, true, ['aaaa556e44dd81c395b0c542f2599aaa'])
+            ->andReturn(['status' => 'ok', 'message' => 'Imported 1 issue(s).', 'created' => 1, 'skipped' => 0, 'preview' => null]);
+
+        NotionSyncAction::run(restoreDeleted: true, restorePageIds: ['aaaa556e44dd81c395b0c542f2599aaa']);
 
         $this->assertSame('Imported 1 issue(s).', $this->sentToasts()->first()['title']);
     }
@@ -84,7 +99,7 @@ class NotionSyncActionTest extends TestCase
     {
         $form = NotionSyncAction::form();
 
-        $this->assertCount(2, $form);
+        $this->assertCount(4, $form);
 
         $checkbox = $form[0];
 
@@ -96,6 +111,18 @@ class NotionSyncActionTest extends TestCase
 
         $this->assertInstanceOf(Placeholder::class, $warning);
         $this->assertSame('full_sync_warning', $warning->getName());
+
+        // The restore picker (owner 2026-10-30) and its empty state — both
+        // hidden until the full-sync checkbox is ticked.
+        $picker = $form[2];
+
+        $this->assertInstanceOf(CheckboxList::class, $picker);
+        $this->assertSame('restorePageIds', $picker->getName());
+
+        $empty = $form[3];
+
+        $this->assertInstanceOf(Placeholder::class, $empty);
+        $this->assertSame('restore_picker_empty', $empty->getName());
     }
 
     private function sentToasts(): Collection

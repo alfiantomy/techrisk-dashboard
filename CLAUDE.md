@@ -128,7 +128,7 @@ Services: `app` (PHP-FPM 8.2), `nginx`, `mysql` (port 3306), `redis` (port 6379)
 - **Factories:** Use for all test data generation
 - **RefreshDatabase** trait for clean state
 - SQLite in-memory for fast test runs
-- **Baseline: 1014 tests / 3,648 assertions green (2026-10-30, watch-ID editor round: the Notion page/database ID field is read-only — Change unlocks a pre-filled input, Save disabled while empty/unchanged, invalid IDs blocked with an inline error, Cancel discards, ✓ Saved on success; Change/Sync now/Preview share one button row; the page-level "Save Settings" button is gone; full history in `docs/reference/testing-standards.md`).** A change that drops this count or its assertions is a regression, not a refactor — unless the delta is a deliberate feature deletion recorded in the baseline history (`docs/reference/testing-standards.md`).
+- **Baseline: 1020 tests / 3,681 assertions green (2026-10-30, full-sync restore picker round: the "Sync now" modal's Full-sync checkbox reveals a checkbox list of the deleted issues a full sync would restore — the operator restores only the ticked pages, unticked stay deleted; an empty pick = deliberate restore-nothing, no pick (console/scheduler) = restore all; the Preview modal is Close-only, its "Continue full sync" submit deleted; full history in `docs/reference/testing-standards.md`).** A change that drops this count or its assertions is a regression, not a refactor — unless the delta is a deliberate feature deletion recorded in the baseline history (`docs/reference/testing-standards.md`).
 
 ---
 

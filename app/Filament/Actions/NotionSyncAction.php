@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
+use App\Filament\Pages\NotionSettings;
 use App\Services\Notion\NotionIssueSyncService;
 use Filament\Forms\Components\Checkbox;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Get;
 use Filament\Notifications\Notification;
@@ -20,13 +22,17 @@ use Illuminate\Support\Str;
  *
  * Two modes (owner 2026-10-29): a normal sync imports only new Notion rows —
  * deleting an Issue from the dashboard is permanent. The "Full sync" checkbox
- * (form()) also restores tombstoned issues, guarded by a conditional warning.
+ * (form()) also restores tombstoned issues — only the ones the operator ticks
+ * in the picker (owner 2026-10-30); unticked issues stay deleted.
  */
 class NotionSyncAction
 {
-    public static function run(bool $restoreDeleted = false): void
+    public static function run(bool $restoreDeleted = false, ?array $restorePageIds = null): void
     {
-        $result = app(NotionIssueSyncService::class)->sync(restoreDeleted: $restoreDeleted);
+        $result = app(NotionIssueSyncService::class)->sync(
+            restoreDeleted: $restoreDeleted,
+            restorePageIds: $restorePageIds,
+        );
 
         if ($result['status'] === 'ok') {
             Notification::make()->success()->title($result['message'])->send();
@@ -49,8 +55,10 @@ class NotionSyncAction
      * The Preview button's modal body (Notion Settings page): a read-only
      * dry run of the FULL sync — the per-reason counts, then every finding
      * on its own line (would-import rows, duplicate titles, what a full
-     * sync would restore, failures). Nothing is written; the modal footer's
-     * "Continue full sync" runs the real thing.
+     * sync would restore, failures). Nothing is written; the real run goes
+     * through "Sync now", where the operator picks what to restore
+     * (2026-10-30) — the old "Continue full sync" footer button restored
+     * everything, exactly what the picker exists to prevent.
      */
     public static function previewModalContent(): \Illuminate\Contracts\View\View
     {
@@ -64,23 +72,36 @@ class NotionSyncAction
 
     /**
      * The Sync-now modal (Notion Settings page only — the Issue-list button
-     * is normal-sync-only per owner 2026-10-29): the full-sync checkbox plus
-     * a warning that only appears once it is ticked, so the operator
-     * confirms they really want every deleted issue back (full sync is
-     * all-or-nothing — it also resurrects duplicates deleted on purpose).
+     * is normal-sync-only per owner 2026-10-29): the full-sync checkbox, and
+     * once it is ticked the restore picker (owner 2026-10-30) — the deleted
+     * issues a full sync WOULD restore (restorableIssues(), the same filter
+     * the run applies), of which only the ticked ones come back. The options
+     * come through the page component so the Notion lookups are made once
+     * per page load, not once per Livewire render.
      */
     public static function form(): array
     {
         return [
             Checkbox::make('restoreDeleted')
                 ->label('Full sync — restore deleted issues')
-                ->helperText('Also re-import every issue that was previously deleted from this dashboard. A normal sync imports only new Notion entries.')
+                ->helperText('Also re-import issues that were previously deleted from this dashboard — you pick which ones. A normal sync imports only new Notion entries.')
                 ->live(),
             Placeholder::make('full_sync_warning')
                 ->content(fn (Get $get): ?HtmlString => filled($get('restoreDeleted')) ? new HtmlString(
-                    '⚠ A full sync re-imports ALL issues that were deleted from this dashboard — including ones deleted on purpose (for example, duplicates). '
-                    .'They will reappear in the Issue list. Leave this unchecked unless you deliberately want everything restored.'
+                    '⚠ Tick below the deleted issues you want back — everything you leave unticked stays deleted, including duplicates deleted on purpose. New Notion rows import either way.'
                 ) : null)
+                ->columnSpanFull(),
+            CheckboxList::make('restorePageIds')
+                ->label('Deleted issues to restore')
+                ->helperText('Only the ticked issues are restored. Leave everything unticked to restore nothing.')
+                ->options(fn (NotionSettings $livewire): array => $livewire->restorableIssueOptions())
+                ->visible(fn (NotionSettings $livewire, Get $get): bool => filled($get('restoreDeleted')) && $livewire->restorableIssueOptions() !== [])
+                ->columnSpanFull(),
+            Placeholder::make('restore_picker_empty')
+                ->content(new HtmlString(
+                    'No restorable deleted issues right now — either nothing was deleted, or Notion could not be reached to list them.'
+                ))
+                ->visible(fn (NotionSettings $livewire, Get $get): bool => filled($get('restoreDeleted')) && $livewire->restorableIssueOptions() === [])
                 ->columnSpanFull(),
         ];
     }
