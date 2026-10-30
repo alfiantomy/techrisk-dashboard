@@ -70,11 +70,15 @@ class NotionSyncActionTest extends TestCase
         $this->assertTrue($checkbox->isLive());
 
         // Step 2: the restore picker with Select All, plus its empty state.
+        // Live is what activates the Import button in the browser — the
+        // ticks must re-render the modal footer for its disabled state to
+        // re-evaluate (prod 2026-10-30: without live the button stayed grey).
         $picker = $form[1];
 
         $this->assertInstanceOf(CheckboxList::class, $picker);
         $this->assertSame('restorePageIds', $picker->getName());
         $this->assertTrue($picker->isBulkToggleable());
+        $this->assertTrue($picker->isLive());
 
         $empty = $form[2];
 

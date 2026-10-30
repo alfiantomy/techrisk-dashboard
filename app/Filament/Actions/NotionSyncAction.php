@@ -74,6 +74,11 @@ class NotionSyncAction
                 ->helperText('Only the ticked issues are restored — everything you leave unticked stays deleted, including duplicates deleted on purpose. New Notion rows import either way.')
                 ->options(fn (NotionSettings $livewire): array => $livewire->fullSyncPickerOpen ? $livewire->restorableIssueOptions() : [])
                 ->visible(fn (NotionSettings $livewire): bool => $livewire->fullSyncPickerOpen && $livewire->restorableIssueOptions() !== [])
+                // Live: without it, ticking (or Select All) updates the state
+                // but never re-renders the modal — the Import button's
+                // disabled state is frozen at the last render and the
+                // operator can never activate it (prod 2026-10-30).
+                ->live()
                 ->bulkToggleable()
                 ->columnSpanFull(),
             Placeholder::make('restore_picker_empty')
