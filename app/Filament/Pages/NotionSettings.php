@@ -17,6 +17,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
@@ -43,6 +44,14 @@ class NotionSettings extends Page implements HasForms
     protected static string $view = 'filament.pages.notion-settings';
 
     public ?array $data = [];
+
+    // Owner 2026-10-30: the watch ID is never open for direct editing — a
+    // "Change" button unlocks the field, Save/Cancel confirm or discard.
+    public bool $editingWatchId = false;
+
+    public bool $watchIdJustSaved = false;
+
+    public ?string $watchIdError = null;
 
     public static function canAccess(): bool
     {
@@ -184,11 +193,78 @@ class NotionSettings extends Page implements HasForms
                 Section::make('Sync issue from Notion')
                     ->description('Runs at 09:00, 12:00, 15:00, and 18:00 (WIB): new sub-pages import as Issues (dedupe by Notion page ID and title, against Issues and Incidents). Deleting an imported issue from the dashboard is permanent — only "Sync now" with "Full sync" restores deleted issues. Use "Preview" for a read-only dry run first.')
                     ->schema([
-                        TextInput::make('watch_page_id')
+                        // Owner 2026-10-30: the ID changes only through the
+                        // explicit Change → Save flow below, never by typing
+                        // straight into the field.
+                        Placeholder::make('watch_page_id_display')
                             ->label('Notion page or database ID')
+                            ->content(function (NotionSettings $livewire): HtmlString {
+                                $current = (string) ($livewire->data['watch_page_id'] ?? '');
+
+                                $value = filled($current)
+                                    ? '<span class="font-mono text-sm">'.e($current).'</span>'
+                                    : '<span class="text-gray-500 dark:text-gray-400">Not set</span>';
+
+                                $badge = $livewire->watchIdJustSaved
+                                    ? ' <span class="font-semibold text-success-600 dark:text-success-400">✓ Saved</span>'
+                                    : '';
+
+                                return new HtmlString($value.$badge);
+                            })
+                            ->columnSpanFull(),
+
+                        TextInput::make('watch_id_input')
+                            ->label('New Notion page or database ID')
                             ->placeholder('e.g. 1f2e3d4c5b6a... or the page URL')
                             ->helperText('Copy the ID or URL from the Notion page/database to watch. Accepts a full URL or a raw ID.')
+                            ->live()
+                            ->visible(fn (NotionSettings $livewire): bool => $livewire->editingWatchId)
                             ->columnSpanFull(),
+
+                        Placeholder::make('watch_id_error')
+                            ->content(fn (NotionSettings $livewire): ?HtmlString => filled($livewire->watchIdError) ? new HtmlString(
+                                '<span class="text-sm font-semibold text-danger-600 dark:text-danger-400">'.e($livewire->watchIdError).'</span>'
+                            ) : null)
+                            ->visible(fn (NotionSettings $livewire): bool => filled($livewire->watchIdError))
+                            ->columnSpanFull(),
+
+                        Actions::make([
+                            Action::make('changeWatchId')
+                                ->label('Change')
+                                ->icon('heroicon-o-pencil-square')
+                                ->visible(fn (NotionSettings $livewire): bool => ! $livewire->editingWatchId)
+                                ->action(function (NotionSettings $livewire): void {
+                                    $livewire->editingWatchId = true;
+                                    $livewire->watchIdJustSaved = false;
+                                    $livewire->watchIdError = null;
+                                    $livewire->data['watch_id_input'] = (string) ($livewire->data['watch_page_id'] ?? '');
+                                }),
+
+                            Action::make('saveWatchId')
+                                ->label('Save')
+                                ->icon('heroicon-m-check')
+                                ->color('primary')
+                                ->visible(fn (NotionSettings $livewire): bool => $livewire->editingWatchId)
+                                // Story 3: disabled while the input is empty or
+                                // unchanged; the ->action() guard enforces it
+                                // server-side too.
+                                ->disabled(function (NotionSettings $livewire, Get $get): bool {
+                                    $extracted = $livewire->normalizePageId(trim((string) ($get('watch_id_input') ?? '')));
+
+                                    return blank($extracted) || $extracted === (string) ($get('watch_page_id') ?? '');
+                                })
+                                ->action(fn (NotionSettings $livewire) => $livewire->saveWatchId()),
+
+                            Action::make('cancelWatchId')
+                                ->label('Cancel')
+                                ->color('gray')
+                                ->visible(fn (NotionSettings $livewire): bool => $livewire->editingWatchId)
+                                ->action(function (NotionSettings $livewire): void {
+                                    $livewire->editingWatchId = false;
+                                    $livewire->watchIdError = null;
+                                    $livewire->data['watch_id_input'] = null;
+                                }),
+                        ]),
 
                         Actions::make([
                             Action::make('syncNow')
@@ -216,11 +292,42 @@ class NotionSettings extends Page implements HasForms
             ->statePath('data');
     }
 
-    public function save(): void
+    /**
+     * The watch-ID editor's Save (owner 2026-10-30). The Change button
+     * unlocked the field; this validates, persists, and locks it again. An
+     * invalid ID keeps edit mode with the input intact and shows the inline
+     * error; a persisted value locks the field with a ✓ Saved badge.
+     */
+    public function saveWatchId(): void
     {
-        $data = $this->form->getState();
+        $input = trim((string) ($this->data['watch_id_input'] ?? ''));
+        $extracted = $this->normalizePageId($input);
+        $current = (string) ($this->data['watch_page_id'] ?? '');
 
-        Setting::set(NotionIssueSyncService::WATCH_KEY, $this->normalizePageId((string) ($data['watch_page_id'] ?? '')) ?: null);
+        if (blank($extracted) || $extracted === $current) {
+            return; // disabled states — nothing to do
+        }
+
+        if (! preg_match('/^[a-f0-9]{32}$/i', $extracted)) {
+            $this->watchIdError = 'That value does not contain a Notion page or database ID — paste the page URL or its 32-character ID.';
+
+            return; // edit mode + input preserved
+        }
+
+        try {
+            Setting::set(NotionIssueSyncService::WATCH_KEY, $extracted);
+        } catch (\Throwable $e) {
+            report($e);
+            $this->watchIdError = 'Could not save the new ID — please try again.';
+
+            return; // edit mode + input preserved
+        }
+
+        $this->data['watch_page_id'] = $extracted;
+        $this->data['watch_id_input'] = null;
+        $this->editingWatchId = false;
+        $this->watchIdError = null;
+        $this->watchIdJustSaved = true;
 
         Notification::make()->success()->title('Notion settings saved')->send();
     }
@@ -228,7 +335,7 @@ class NotionSettings extends Page implements HasForms
     /**
      * Accept a full Notion URL or a bare ID — store the bare ID either way.
      */
-    private function normalizePageId(string $value): string
+    public function normalizePageId(string $value): string
     {
         $value = trim($value);
 
