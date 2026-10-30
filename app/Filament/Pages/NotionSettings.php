@@ -228,6 +228,9 @@ class NotionSettings extends Page implements HasForms
                             ->visible(fn (NotionSettings $livewire): bool => filled($livewire->watchIdError))
                             ->columnSpanFull(),
 
+                        // Owner 2026-10-30: Change, Sync now, and Preview sit
+                        // on ONE horizontal line — while editing, Save/Cancel
+                        // take Change's slot in the same row.
                         Actions::make([
                             Action::make('changeWatchId')
                                 ->label('Change')
@@ -264,9 +267,7 @@ class NotionSettings extends Page implements HasForms
                                     $livewire->watchIdError = null;
                                     $livewire->data['watch_id_input'] = null;
                                 }),
-                        ]),
 
-                        Actions::make([
                             Action::make('syncNow')
                                 ->label('Sync now')
                                 ->icon('heroicon-m-arrow-path')

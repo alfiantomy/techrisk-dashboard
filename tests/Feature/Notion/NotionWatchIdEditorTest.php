@@ -41,6 +41,16 @@ class NotionWatchIdEditorTest extends TestCase
             ->assertDontSee('Save Settings');
     }
 
+    public function test_change_sync_now_and_preview_share_one_button_row(): void
+    {
+        // Owner 2026-10-30: Change, Sync now, and Preview sit on the same
+        // horizontal line — one Filament Actions row, not two stacked rows.
+        $this->assertSame(
+            1,
+            substr_count($this->settingsPage()->html(), 'fi-fo-actions'),
+        );
+    }
+
     public function test_change_unlocks_the_field_with_the_current_id_prefilled(): void
     {
         $this->watchId(self::OLD_ID);
