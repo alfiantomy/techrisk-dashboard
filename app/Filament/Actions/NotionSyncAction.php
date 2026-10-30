@@ -46,30 +46,20 @@ class NotionSyncAction
     }
 
     /**
-     * The Preview button: a dry run of the FULL sync — read-only, and it
-     * shows everything a sync could do: would-import rows, the rows skipped
-     * as duplicates (a drifted title shows up here), and what a full sync
-     * would restore.
+     * The Preview button's modal body (Notion Settings page): a read-only
+     * dry run of the FULL sync — the per-reason counts, then every finding
+     * on its own line (would-import rows, duplicate titles, what a full
+     * sync would restore, failures). Nothing is written; the modal footer's
+     * "Continue full sync" runs the real thing.
      */
-    public static function preview(): void
+    public static function previewModalContent(): \Illuminate\Contracts\View\View
     {
         $result = app(NotionIssueSyncService::class)->sync(dryRun: true, restoreDeleted: true);
 
-        $body = $result['message'];
-
-        if (filled($result['preview'])) {
-            $lines = explode("\n", $result['preview']);
-            $shown = array_slice($lines, 0, 40);
-            $body .= "\n\n".implode("\n", $shown)
-                .(count($lines) > 40 ? "\n… and ".(count($lines) - 40).' more' : '');
-        }
-
-        Notification::make()
-            ->{$result['status'] === 'failed' ? 'danger' : 'warning'}()
-            ->title('Preview (dry run) — nothing was imported')
-            ->body($body)
-            ->persistent()
-            ->send();
+        return view('filament.actions.notion-dry-run', [
+            'message' => $result['message'],
+            'lines' => filled($result['preview']) ? explode("\n", $result['preview']) : [],
+        ]);
     }
 
     /**
