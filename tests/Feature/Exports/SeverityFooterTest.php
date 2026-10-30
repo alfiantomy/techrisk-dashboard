@@ -157,7 +157,7 @@ class SeverityFooterTest extends TestCase
     {
         // FromCollection path: counts derive from the loaded collection —
         // the sign split must match the SQL split. Custom columns are few
-        // (Title + MTBF = B), so the banner merges to the min-H floor —
+        // (Title + MTBF = B), so the banner merges to the min-L floor —
         // merged cells clip, the floor keeps the line readable.
         $incidents = $this->baseline()->orderBy('incident_date')->get();
         $stats = ['totalCases' => 5, 'avgMttr' => 52.5, 'totalPotentialFundLoss' => 0, 'totalFundLoss' => 0, 'totalRecoveredFund' => 0];
