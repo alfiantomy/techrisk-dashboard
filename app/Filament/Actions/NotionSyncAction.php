@@ -55,10 +55,9 @@ class NotionSyncAction
      * The Preview button's modal body (Notion Settings page): a read-only
      * dry run of the FULL sync — the per-reason counts, then every finding
      * on its own line (would-import rows, duplicate titles, what a full
-     * sync would restore, failures). Nothing is written; the real run goes
-     * through "Sync now", where the operator picks what to restore
-     * (2026-10-30) — the old "Continue full sync" footer button restored
-     * everything, exactly what the picker exists to prevent.
+     * sync would restore, failures). Nothing is written; the footer's
+     * "Continue full sync" opens the Sync-now picker with full sync
+     * pre-ticked (2026-10-30) — the pick, not the preview, triggers the run.
      */
     public static function previewModalContent(): \Illuminate\Contracts\View\View
     {
@@ -75,9 +74,10 @@ class NotionSyncAction
      * is normal-sync-only per owner 2026-10-29): the full-sync checkbox, and
      * once it is ticked the restore picker (owner 2026-10-30) — the deleted
      * issues a full sync WOULD restore (restorableIssues(), the same filter
-     * the run applies), of which only the ticked ones come back. The options
-     * come through the page component so the Notion lookups are made once
-     * per page load, not once per Livewire render.
+     * the run applies), of which only the ticked ones come back (Select All
+     * toggles the whole list). The options come through the page component
+     * so the Notion lookups are made once per page load, not once per
+     * Livewire render.
      */
     public static function form(): array
     {
@@ -96,6 +96,7 @@ class NotionSyncAction
                 ->helperText('Only the ticked issues are restored. Leave everything unticked to restore nothing.')
                 ->options(fn (NotionSettings $livewire): array => $livewire->restorableIssueOptions())
                 ->visible(fn (NotionSettings $livewire, Get $get): bool => filled($get('restoreDeleted')) && $livewire->restorableIssueOptions() !== [])
+                ->bulkToggleable()
                 ->columnSpanFull(),
             Placeholder::make('restore_picker_empty')
                 ->content(new HtmlString(

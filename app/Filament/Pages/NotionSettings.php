@@ -59,6 +59,10 @@ class NotionSettings extends Page implements HasForms
     // per page load instead of one per checkbox tick.
     public ?array $restorableIssueOptionsCache = null;
 
+    // One-shot: the Preview modal's "Continue full sync" pre-ticks the
+    // picker's full-sync checkbox on the mount it triggers.
+    public bool $fullSyncPrefill = false;
+
     public static function canAccess(): bool
     {
         return Auth::check() && Auth::user()->can('manage api tokens');
@@ -278,6 +282,13 @@ class NotionSettings extends Page implements HasForms
                                 ->label('Sync now')
                                 ->icon('heroicon-m-arrow-path')
                                 ->form(NotionSyncAction::form())
+                                ->mountUsing(function (Form $form, NotionSettings $livewire): void {
+                                    // The Preview's "Continue full sync" lands
+                                    // here with the checkbox pre-ticked; a direct
+                                    // "Sync now" opens normal.
+                                    $form->fill(['restoreDeleted' => $livewire->fullSyncPrefill]);
+                                    $livewire->fullSyncPrefill = false;
+                                })
                                 ->action(function (array $data): void {
                                     $full = (bool) ($data['restoreDeleted'] ?? false);
 
@@ -296,14 +307,27 @@ class NotionSettings extends Page implements HasForms
                                 ->color('gray')
                                 // Owner 2026-10-30: the dry run opens a centered
                                 // modal (scrollable list, one finding per line) —
-                                // read-only, Close only. The real run goes through
-                                // "Sync now" and its restore picker; "Continue full
-                                // sync" restored everything, exactly what the picker
-                                // exists to prevent.
+                                // read-only. Close, or "Continue full sync", which
+                                // OPENS THE PICKER with full sync pre-ticked (the
+                                // pick triggers the run — continuing never syncs
+                                // by itself).
                                 ->modalHeading('Preview (dry run) — nothing was imported')
                                 ->modalContent(fn (): \Illuminate\Contracts\View\View => NotionSyncAction::previewModalContent())
-                                ->modalSubmitAction(false)
-                                ->modalCancelActionLabel('Close'),
+                                ->modalSubmitActionLabel('Continue full sync')
+                                ->modalCancelActionLabel('Close')
+                                ->action(function (NotionSettings $livewire, \Filament\Forms\Components\Actions\Action $action): void {
+                                    // Swap the preview for the picker: pop the
+                                    // preview, push the picker, then halt — the
+                                    // tail unmount of a normal action completion
+                                    // pops whatever is MOUNTED (the picker we
+                                    // just pushed), closing it again. The mount's
+                                    // component key is the schema's state-path key
+                                    // ('data.syncNowAction'), not the bare name.
+                                    $livewire->unmountFormComponentAction(shouldCancelParentActions: false, shouldCloseModal: false);
+                                    $livewire->fullSyncPrefill = true;
+                                    $livewire->mountFormComponentAction('data.syncNowAction', 'syncNow');
+                                    $action->halt();
+                                }),
                         ]),
                     ]),
             ])
