@@ -201,7 +201,15 @@ class NotionSettings extends Page implements HasForms
                                 ->label('Preview')
                                 ->icon('heroicon-o-eye')
                                 ->color('gray')
-                                ->action(fn () => NotionSyncAction::preview()),
+                                // Owner 2026-10-30: the dry run opens a
+                                // centered modal (scrollable list, one finding
+                                // per line) — Close, or "Continue full sync"
+                                // to run for real what was just previewed.
+                                ->modalHeading('Preview (dry run) — nothing was imported')
+                                ->modalContent(fn (): \Illuminate\Contracts\View\View => NotionSyncAction::previewModalContent())
+                                ->modalSubmitActionLabel('Continue full sync')
+                                ->modalCancelActionLabel('Close')
+                                ->action(fn () => NotionSyncAction::run(restoreDeleted: true)),
                         ]),
                     ]),
             ])

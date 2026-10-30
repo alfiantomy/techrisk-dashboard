@@ -11,10 +11,10 @@ use Tests\TestCase;
 
 /**
  * The shared sync runner: "Sync now" on both surfaces passes the full-sync
- * flag through to the service, and the Preview button runs a READ-ONLY dry
- * run of the full sync with the itemized preview in the notification.
- * Outside a Livewire component the toast lands in the session (the same
- * surface NotionOauthRoutesTest asserts on).
+ * flag through to the service. The Preview button opens a MODAL (owner
+ * 2026-10-30): the dry run of the full sync renders there — one finding per
+ * line, scrollable — with "Close" and "Continue full sync" in the footer;
+ * it is no longer a toast.
  */
 class NotionSyncActionTest extends TestCase
 {
@@ -40,28 +40,44 @@ class NotionSyncActionTest extends TestCase
         $this->assertSame('Imported 1 issue(s).', $this->sentToasts()->first()['title']);
     }
 
-    public function test_preview_runs_a_read_only_full_dry_run(): void
+    public function test_the_preview_modal_content_is_the_read_only_full_dry_run(): void
     {
         $this->mock(NotionIssueSyncService::class)
             ->shouldReceive('sync')->once()->with(true, true)
             ->andReturn([
                 'status' => 'ok',
-                'message' => 'Would import 2 issue(s); 1 already synced/duplicate/blank.',
+                'message' => 'Would import 2 issue(s); 1 already synced; 1 duplicate title(s).',
                 'created' => 2,
-                'skipped' => 1,
+                'skipped' => 2,
                 'preview' => implode("\n", array_map(fn (int $i) => "- Row {$i}", range(1, 45))),
             ]);
 
-        NotionSyncAction::preview();
+        $html = (string) NotionSyncAction::previewModalContent();
 
-        $toast = $this->sentToasts()->first();
-        $body = (string) ($toast['body'] ?? '');
+        // The summary carries the per-reason breakdown; every finding gets
+        // its own line, uncapped — the modal scrolls.
+        $this->assertStringContainsString('Would import 2 issue(s); 1 already synced; 1 duplicate title(s).', $html);
+        $this->assertStringContainsString('Row 1', $html);
+        $this->assertStringContainsString('Row 45', $html);
+        $this->assertStringContainsString('overflow-y-auto', $html);
+    }
 
-        $this->assertStringContainsString('dry run', (string) $toast['title']);
-        $this->assertStringContainsString('Would import 2 issue(s); 1 already synced/duplicate/blank.', $body);
-        $this->assertStringContainsString('- Row 40', $body);
-        $this->assertStringContainsString('… and 5 more', $body);
-        $this->assertStringNotContainsString('- Row 41'.PHP_EOL, $body);
+    public function test_the_preview_modal_marks_failed_rows(): void
+    {
+        $this->mock(NotionIssueSyncService::class)
+            ->shouldReceive('sync')->once()->with(true, true)
+            ->andReturn([
+                'status' => 'partial',
+                'message' => 'Would import 0 issue(s); 1 failed.',
+                'created' => 0,
+                'skipped' => 0,
+                'preview' => "FAILED: Broken row — title too long\n- Good row (2026-07-01, P3)",
+            ]);
+
+        $html = (string) NotionSyncAction::previewModalContent();
+
+        $this->assertStringContainsString('text-danger-600', $html);
+        $this->assertStringContainsString('FAILED: Broken row — title too long', $html);
     }
 
     public function test_the_shared_sync_modal_carries_the_full_sync_checkbox_and_warning(): void

@@ -207,7 +207,7 @@ class NotionIssueSyncServiceTest extends TestCase
 
         // Same-title issue already exists — restoring would duplicate it.
         $this->assertSame('ok', $result['status']);
-        $this->assertSame('Imported 0 issue(s); 1 already synced/duplicate/blank.', $result['message']);
+        $this->assertSame('No new issues; 1 duplicate title(s).', $result['message']);
         $this->assertSame(0, NotionSyncedPage::count());
         $this->assertSame(1, Incident::count());
     }
@@ -313,7 +313,7 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame(0, NotionSyncedPage::count());
     }
 
-    public function test_dry_run_itemizes_each_row_outcome(): void
+    public function test_dry_run_itemizes_each_finding_on_its_own_line(): void
     {
         $existing = Incident::create([
             'title' => 'Already there',
@@ -337,10 +337,14 @@ class NotionIssueSyncServiceTest extends TestCase
         $result = app(NotionIssueSyncService::class)->sync(dryRun: true);
 
         $preview = (string) $result['preview'];
-        $this->assertStringContainsString('Brand new row', $preview);
-        $this->assertStringContainsString('Duplicate title (already in the dashboard): Already there', $preview);
-        $this->assertStringContainsString('Already synced from Notion: Synced before', $preview);
-        $this->assertSame('Would import 1 issue(s); 2 already synced/duplicate/blank.', $result['message']);
+        // Findings get their own line each; the EXPECTED already-synced state
+        // is a count in the message, never a line — a first-run preview used
+        // to be a wall of "Already synced from Notion" rows hiding the real
+        // findings (owner 2026-10-30).
+        $this->assertStringContainsString('- Brand new row', $preview);
+        $this->assertStringContainsString('- Duplicate title (already in the dashboard): Already there', $preview);
+        $this->assertStringNotContainsString('Synced before', $preview);
+        $this->assertSame('Would import 1 issue(s); 1 already synced; 1 duplicate title(s).', $result['message']);
     }
 
     public function test_the_boundary_reread_is_never_reported_as_a_skip(): void
@@ -369,10 +373,10 @@ class NotionIssueSyncServiceTest extends TestCase
 
         $result = app(NotionIssueSyncService::class)->sync(dryRun: true);
 
-        $preview = (string) $result['preview'];
-        $this->assertStringContainsString('Already synced from Notion: Later synced', $preview);
-        $this->assertStringNotContainsString('Already synced from Notion: Synced before', $preview);
-        $this->assertSame('Would import 0 issue(s); 1 already synced/duplicate/blank.', $result['message']);
+        // Neither row is a finding, so neither gets a line; only 'Later
+        // synced' counts — the boundary re-read is invisible.
+        $this->assertSame('', (string) $result['preview']);
+        $this->assertSame('No new issues; 1 already synced.', $result['message']);
     }
 
     public function test_classification_column_wins_over_root_cause_mapping(): void
@@ -532,8 +536,55 @@ class NotionIssueSyncServiceTest extends TestCase
         $this->assertSame('ok', $result['status']);
         $this->assertSame(0, $result['created']);
         $this->assertSame(1, $result['skipped']);
-        $this->assertSame('Imported 0 issue(s); 1 already synced/duplicate/blank.', $result['message']);
+        $this->assertSame('No new issues; 1 duplicate title(s).', $result['message']);
         $this->assertSame(1, Incident::count());
+    }
+
+    public function test_a_dry_run_paginates_past_the_per_query_row_cap(): void
+    {
+        // Field evidence (prod, 2026-10-30): the Notion engine returned
+        // exactly 100 rows of a larger database — the preview's counts were
+        // silently capped ("99 already synced" for a bigger table). A dry
+        // run must walk the whole window so its numbers are real.
+        Setting::set(NotionIssueSyncService::WATCH_KEY, 'db-1');
+
+        $firstPage = [];
+        foreach (range(1, 100) as $i) {
+            $firstPage[] = $this->row(
+                sprintf('%032x', $i),
+                "Row {$i}",
+                '2026-01-12',
+                'P3',
+                'Data Issue',
+                createdTime: sprintf('2026-07-01 00:00:%02dZ', $i - 1),
+            );
+        }
+
+        $this->mock(NotionMcpClient::class)
+            ->shouldReceive('connected')->andReturn(true)
+            ->shouldReceive('callToolDetailed')->once()->with('notion-fetch', ['id' => 'db-1'])
+            ->andReturn(['structured' => null, 'text' => $this->fetchText(), 'isError' => false])
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => ! str_contains($args['data']['query'] ?? '', 'WHERE')
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => $firstPage]), 'isError' => false])
+            // Continuation: `>=` the last page's tail so same-second ties are
+            // never skipped; the tail row itself comes back as a re-read and
+            // the URL dedupe drops it.
+            ->shouldReceive('callToolDetailed')->once()->with('notion-query-data-sources', Mockery::on(
+                fn (array $args) => str_contains($args['data']['query'] ?? '', "WHERE createdTime >= '2026-07-01 00:00:99Z'")
+            ))
+            ->andReturn(['structured' => null, 'text' => json_encode(['results' => [
+                $firstPage[99],
+                $this->row(str_repeat('a', 32), 'Row 101', '2026-01-12', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:00Z'),
+                $this->row(str_repeat('b', 32), 'Row 102', '2026-01-12', 'P3', 'Data Issue', createdTime: '2026-07-02 00:00:01Z'),
+            ]]), 'isError' => false]);
+
+        $result = app(NotionIssueSyncService::class)->sync(dryRun: true);
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(102, $result['created']);
+        $this->assertSame('Would import 102 issue(s).', $result['message']);
     }
 
     public function test_dry_run_creates_nothing(): void

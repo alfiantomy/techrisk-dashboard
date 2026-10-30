@@ -46,8 +46,16 @@ class NotionIssueSyncService
 
     public const WATERMARK_KEY = 'notion_sync_watermark';
 
-    /** Per-run cap on new rows; ASC order + watermark picks the rest up next run. */
-    protected const SCAN_LIMIT = 200;
+    /**
+     * Query page size — and the real sync's drain rate (the watermark picks
+     * the rest up over the following runs). 100 = the Notion engine's
+     * observed per-query row cap (prod 2026-10-30 returned exactly 100 of a
+     * larger database); asking for more never yields more.
+     */
+    protected const SCAN_LIMIT = 100;
+
+    /** Dry-run pagination runaway guard (25 pages × SCAN_LIMIT rows). */
+    protected const MAX_SCAN_PAGES = 25;
 
     /** Normalized titles of existing Issues, loaded once per run — never a per-row table scan. */
     protected ?array $existingIssueTitles = null;
@@ -96,8 +104,11 @@ class NotionIssueSyncService
         }
 
         $created = 0;
-        $skipped = 0;
         $failed = 0;
+        $alreadySynced = 0;
+        $duplicates = 0;
+        $blanks = 0;
+        $unreadable = 0;
         $lines = [];
         // createdTime of the FIRST failed row — the watermark never advances
         // past it, so the row is retried once its data is fixed (everything
@@ -112,31 +123,12 @@ class NotionIssueSyncService
         if ($restoreDeleted) {
             $recovered = $this->recoverDeletedIssues($collectionUrl, $lines, $dryRun);
             $created += $recovered['created'];
-            $skipped += $recovered['skipped'];
+            $duplicates += $recovered['duplicates'];
+            $blanks += $recovered['blanks'];
             $failed += $recovered['failed'];
         }
 
-        $query = $this->notion->callToolDetailed('notion-query-data-sources', [
-            'data' => [
-                'data_source_urls' => [$collectionUrl],
-                // Column names are this database's properties (same names the
-                // CSV importer maps); date properties use the expanded
-                // `date:<name>:start` column documented in the fetched schema.
-                //
-                // Incremental: only rows created at/after the watermark are
-                // read — `>=` (not >) so a row sharing the watermark's second
-                // is still fetched and page-ID dedupe absorbs the re-read.
-                // ASC + LIMIT means a burst of new rows is drained oldest
-                // first, the remainder next run (DESC could skip middles).
-                'query' => sprintf(
-                    'SELECT %s FROM "%s" %sORDER BY createdTime ASC LIMIT %d',
-                    self::ROW_COLUMNS,
-                    $collectionUrl,
-                    $this->whereSinceWatermark(),
-                    self::SCAN_LIMIT,
-                ),
-            ],
-        ]);
+        $query = $this->notion->callToolDetailed('notion-query-data-sources', $this->rowQueryArguments($collectionUrl, $this->whereSinceWatermark()));
 
         if ($query === null) {
             return $this->finish('failed', 'Notion data-source query failed — check the logs.', 0, 0, $dryRun);
@@ -152,6 +144,17 @@ class NotionIssueSyncService
             return $this->finish('failed', 'Could not read rows from the Notion query response — see the preview for the raw shape.', 0, 0, $dryRun, $query['text']);
         }
 
+        // Dry runs must report REAL totals: the engine returns at most 100
+        // rows per query, so a bigger database's counts were silently capped
+        // (prod 2026-10-30: "99 already synced" for a larger table). Real
+        // syncs keep the single-window drain — the watermark picks the rest
+        // up over the following runs.
+        $truncated = false;
+
+        if ($dryRun) {
+            [$rows, $truncated] = $this->paginateWindow($collectionUrl, $rows);
+        }
+
         // The `>=` window always re-fetches rows sharing the watermark's
         // second; ones already handled last run are expected re-reads, not
         // findings — skipped but never counted.
@@ -163,13 +166,17 @@ class NotionIssueSyncService
 
             if ($pageId === null || NotionSyncedPage::where('page_id', $pageId)->exists()) {
                 if (! $boundary) {
-                    $skipped++;
-                    // Itemized for the dry-run preview (a real sync shows it
-                    // only when the run fails). The boundary re-read is an
-                    // expected re-read, never a finding.
-                    $lines[] = $pageId === null
-                        ? '- Unreadable page URL: '.($row['Name'] ?? '?')
-                        : '- Already synced from Notion: '.($row['Name'] ?? '?');
+                    // A page-ID match is the EXPECTED already-synced state —
+                    // a count in the message, never a line: a first-run
+                    // preview used to be a wall of "Already synced from
+                    // Notion" rows hiding the real findings (owner 2026-10-30).
+                    // The boundary re-read is an expected re-read, not a skip.
+                    if ($pageId === null) {
+                        $unreadable++;
+                        $lines[] = '- Unreadable page URL: '.($row['Name'] ?? '?');
+                    } else {
+                        $alreadySynced++;
+                    }
                 }
 
                 continue;
@@ -197,7 +204,8 @@ class NotionIssueSyncService
             if ($imported !== null) {
                 $created++;
             } elseif (! $boundary) {
-                $skipped++;
+                // importRow returns null only for a blank title or a duplicate.
+                blank($row['Name'] ?? null) ? $blanks++ : $duplicates++;
             }
         }
 
@@ -210,11 +218,27 @@ class NotionIssueSyncService
             $this->advanceWatermark($rowsForWatermark);
         }
 
-        $held = $skipped > 0 ? "; {$skipped} already synced/duplicate/blank" : '';
-        $broken = $failed > 0 ? "; {$failed} failed" : '';
-        $message = ($created === 0 && $skipped === 0 && $failed === 0)
-            ? 'No new issues.'
-            : "{$label} {$created} issue(s){$held}{$broken}.";
+        // Per-reason breakdown (owner 2026-10-30): one lumped
+        // "already synced/duplicate/blank" number read as trouble when
+        // almost all of it is the normal already-synced state. Only
+        // non-zero segments appear; `skipped` stays the aggregate.
+        $skipped = $alreadySynced + $duplicates + $blanks + $unreadable;
+
+        if ($created === 0 && $skipped === 0 && $failed === 0) {
+            $message = 'No new issues.';
+        } else {
+            $segments = array_filter([
+                $created > 0 ? "{$label} {$created} issue(s)" : 'No new issues',
+                $alreadySynced > 0 ? "{$alreadySynced} already synced" : null,
+                $duplicates > 0 ? "{$duplicates} duplicate title(s)" : null,
+                $blanks > 0 ? "{$blanks} blank title(s)" : null,
+                $unreadable > 0 ? "{$unreadable} unreadable URL(s)" : null,
+                $failed > 0 ? "{$failed} failed" : null,
+                $truncated ? 'scan stopped at the '.self::MAX_SCAN_PAGES.'-page cap — counts cover the first '.count($rows).' rows' : null,
+            ]);
+
+            $message = implode('; ', $segments).'.';
+        }
 
         return $this->finish($failed > 0 ? 'partial' : 'ok', $message, $created, $skipped, $dryRun, implode("\n", $lines));
     }
@@ -328,14 +352,15 @@ class NotionIssueSyncService
      * each restorable page is reported as a would-restore line.
      *
      * @param  array<int, string>  $lines
-     * @return array{created: int, skipped: int, failed: int}
+     * @return array{created: int, duplicates: int, blanks: int, failed: int}
      */
     protected function recoverDeletedIssues(string $collectionUrl, array &$lines, bool $dryRun): array
     {
         $dangling = NotionSyncedPage::query()->whereNull('incident_id')->get();
 
         $created = 0;
-        $skipped = 0;
+        $duplicates = 0;
+        $blanks = 0;
         $failed = 0;
 
         foreach ($dangling as $page) {
@@ -349,8 +374,14 @@ class NotionIssueSyncService
                 // Preview-only: report what a full sync would bring back.
                 $title = $row['Name'] ?? null;
 
-                if (blank($title) || $this->titleAlreadyExists((string) $title)) {
-                    $skipped++;
+                if (blank($title)) {
+                    $blanks++;
+
+                    continue;
+                }
+
+                if ($this->titleAlreadyExists((string) $title)) {
+                    $duplicates++;
 
                     continue;
                 }
@@ -390,11 +421,12 @@ class NotionIssueSyncService
             if ($restored) {
                 $created++;
             } else {
-                $skipped++;
+                // importRow returned null: blank title or duplicate.
+                blank($row['Name'] ?? null) ? $blanks++ : $duplicates++;
             }
         }
 
-        return ['created' => $created, 'skipped' => $skipped, 'failed' => $failed];
+        return ['created' => $created, 'duplicates' => $duplicates, 'blanks' => $blanks, 'failed' => $failed];
     }
 
     /**
@@ -435,6 +467,105 @@ class NotionIssueSyncService
         $rows = $this->extractRows((string) $query['text']);
 
         return $rows === null ? null : ($rows[0] ?? []);
+    }
+
+    /**
+     * The rows query: column names are this database's properties (same
+     * names the CSV importer maps); date properties use the expanded
+     * `date:<name>:start` column documented in the fetched schema.
+     * Incremental: only rows created at/after the watermark are read —
+     * `>=` (not >) so a row sharing the watermark's second is still fetched
+     * and page-ID dedupe absorbs the re-read. ASC + LIMIT means a burst of
+     * new rows is drained oldest first, the remainder next run (DESC could
+     * skip middles).
+     */
+    protected function rowQueryArguments(string $collectionUrl, string $where): array
+    {
+        return ['data' => [
+            'data_source_urls' => [$collectionUrl],
+            'query' => sprintf(
+                'SELECT %s FROM "%s" %sORDER BY createdTime ASC LIMIT %d',
+                self::ROW_COLUMNS,
+                $collectionUrl,
+                $where,
+                self::SCAN_LIMIT,
+            ),
+        ]];
+    }
+
+    /**
+     * Follow a full page of results with moving `createdTime >= tail`
+     * queries until the window is exhausted, so dry-run counts are the REAL
+     * totals (the engine returns at most 100 rows per query — prod
+     * 2026-10-30 showed exactly 100 of a larger database, silently capping
+     * the preview). The tail row itself comes back on the next page and is
+     * dropped by URL dedupe — `>=` (not >) so same-second ties at the page
+     * boundary are never skipped. Returns [rows, truncated] — truncated
+     * only when the MAX_SCAN_PAGES runaway guard fired.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return array{0: list<array<string, mixed>>, 1: bool}
+     */
+    protected function paginateWindow(string $collectionUrl, array $rows): array
+    {
+        $seenUrls = [];
+
+        foreach ($rows as $row) {
+            $seenUrls[(string) ($row['url'] ?? '')] = true;
+        }
+
+        $batch = $rows;
+        $pages = 1; // the caller's window query was page 1
+
+        while (count($batch) === self::SCAN_LIMIT && $pages < self::MAX_SCAN_PAGES) {
+            $tail = (string) (end($batch)['createdTime'] ?? '');
+
+            if ($tail === '') {
+                break;
+            }
+
+            $query = $this->notion->callToolDetailed('notion-query-data-sources', $this->rowQueryArguments(
+                $collectionUrl,
+                sprintf("WHERE createdTime >= '%s' ", str_replace("'", "''", $tail)),
+            ));
+
+            if ($query === null || $query['isError']) {
+                Log::warning('Notion issue sync: dry-run pagination query failed — reporting the rows read so far.', [
+                    'tail' => $tail,
+                    'text' => $query['text'] ?? null,
+                ]);
+
+                break;
+            }
+
+            $next = $this->extractRows((string) $query['text']);
+
+            if ($next === null) {
+                break;
+            }
+
+            $fresh = array_values(array_filter($next, fn (array $row): bool => ! isset($seenUrls[(string) ($row['url'] ?? '')])));
+
+            if ($fresh === []) {
+                break; // only re-reads came back — the window is exhausted
+            }
+
+            foreach ($fresh as $row) {
+                $seenUrls[(string) ($row['url'] ?? '')] = true;
+                $rows[] = $row;
+            }
+
+            $batch = $next;
+            $pages++;
+        }
+
+        $truncated = count($batch) === self::SCAN_LIMIT && $pages >= self::MAX_SCAN_PAGES;
+
+        if ($truncated) {
+            Log::warning('Notion issue sync: dry-run scan hit the page cap — counts cover the rows read.', ['rows' => count($rows)]);
+        }
+
+        return [$rows, $truncated];
     }
 
     /**
