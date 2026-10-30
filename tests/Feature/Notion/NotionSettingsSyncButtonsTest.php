@@ -6,22 +6,22 @@ use App\Filament\Actions\NotionSyncAction;
 use App\Filament\Pages\NotionSettings;
 use App\Models\User;
 use App\Services\Notion\NotionIssueSyncService;
+use Filament\Actions\StaticAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
-use Mockery;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 /**
  * The Notion Settings page's sync buttons live INSIDE the "Sync issue from
- * Notion" section (owner 2026-10-29), not in the page header: "Sync now"
- * carries the full-sync checkbox plus the restore picker (owner 2026-10-30 —
- * only the ticked deleted issues come back, Select All included) and
- * "Preview" opens a centered modal with the read-only dry run of the full
- * sync — Close, or "Continue full sync", which swaps the preview for the
- * PICKER (full sync pre-ticked); the pick, not the preview, triggers the
- * run (owner 2026-10-30). They are form-component actions — the header holds
- * only the connection buttons.
+ * Notion" section (owner 2026-10-29), not in the page header. "Sync now" is
+ * a two-step modal (owner 2026-10-30 redesign): step 1 is the full-sync
+ * checkbox with a submit button labelled "Sync" — "Full sync" once ticked;
+ * clicking it reads Notion and turns the same modal into the restore picker
+ * (Select All included), where the submit becomes "Import" — greyed out
+ * until at least one issue is selected. There is no Preview/dry-run step
+ * anymore: the picker list IS the preview. They are form-component actions —
+ * the header holds only the connection buttons.
  */
 class NotionSettingsSyncButtonsTest extends TestCase
 {
@@ -39,95 +39,107 @@ class NotionSettingsSyncButtonsTest extends TestCase
             ->assertNotified('No new issues.');
     }
 
-    public function test_sync_now_full_sync_restores_only_the_picked_issues(): void
+    public function test_the_submit_button_is_sync_until_the_full_sync_checkbox_is_ticked(): void
     {
-        // The options must be non-empty for the checkbox list to render —
-        // a hidden (unrendered) picker dehydrates nothing.
+        $this->mock(NotionIssueSyncService::class)
+            ->shouldReceive('restorableIssues')->andReturn([]);
+
+        $page = $this->settingsPage()
+            ->mountFormComponentAction('syncNowAction', 'syncNow');
+
+        $this->assertSame('Sync', $this->submitLabel($page));
+
+        $page->setFormComponentActionData(['restoreDeleted' => true]);
+
+        $this->assertSame('Full sync', $this->submitLabel($page));
+    }
+
+    public function test_the_full_sync_button_reads_notion_and_opens_the_restore_picker(): void
+    {
+        $this->mock(NotionIssueSyncService::class)
+            // The full-sync click reads Notion — exactly once, fresh (the
+            // click drops the options memo).
+            ->shouldReceive('restorableIssues')->once()->andReturn([
+                'aaaa556e44dd81c395b0c542f2599aaa' => 'DB down (2026-01-12, P2)',
+            ])
+            // Opening the picker never syncs by itself — only Import does.
+            ->shouldReceive('sync')->never();
+
+        $page = $this->settingsPage()
+            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true]);
+
+        $page
+            ->assertFormComponentActionMounted('syncNowAction', ['syncNow'])
+            ->assertSee('Deleted issues to restore')
+            ->assertSee('DB down (2026-01-12, P2)')
+            ->assertSee('Cancel');
+
+        $this->assertTrue($page->instance()->fullSyncPickerOpen);
+        $this->assertSame('Import', $this->submitLabel($page));
+    }
+
+    public function test_import_is_greyed_out_until_an_issue_is_selected(): void
+    {
         $this->mock(NotionIssueSyncService::class)
             ->shouldReceive('restorableIssues')->andReturn([
                 'aaaa556e44dd81c395b0c542f2599aaa' => 'DB down (2026-01-12, P2)',
+            ]);
+
+        $page = $this->settingsPage()
+            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true]);
+
+        $this->assertTrue($this->submitAction($page)->isDisabled());
+
+        $page->setFormComponentActionData(['restorePageIds' => ['aaaa556e44dd81c395b0c542f2599aaa']]);
+
+        $this->assertFalse($this->submitAction($page)->isDisabled());
+    }
+
+    public function test_import_restores_only_the_picked_issues(): void
+    {
+        $this->mock(NotionIssueSyncService::class)
+            ->shouldReceive('restorableIssues')->andReturn([
+                'aaaa556e44dd81c395b0c542f2599aaa' => 'DB down (2026-01-12, P2)',
+                'bbbb556e44dd81c395b0c542f2599bbb' => 'API down (2026-02-02, P1)',
             ])
             ->shouldReceive('sync')->once()->with(false, true, ['aaaa556e44dd81c395b0c542f2599aaa'])
             ->andReturn(['status' => 'ok', 'message' => 'Imported 1 issue(s).', 'created' => 1, 'skipped' => 0, 'preview' => null]);
 
         $this->settingsPage()
-            ->callFormComponentAction('syncNowAction', 'syncNow', data: [
-                'restoreDeleted' => true,
-                'restorePageIds' => ['aaaa556e44dd81c395b0c542f2599aaa'],
-            ])
+            // Step 1 → 2: tick full sync, click "Full sync" — the picker opens.
+            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true])
+            ->assertFormComponentActionMounted('syncNowAction', ['syncNow'])
+            // Step 2: pick one of the two, click "Import" (still mounted —
+            // no re-mount, or the nesting index would grow).
+            ->setFormComponentActionData(['restorePageIds' => ['aaaa556e44dd81c395b0c542f2599aaa']])
+            ->call('callMountedFormComponentAction')
             ->assertNotified('Imported 1 issue(s).');
     }
 
-    public function test_sync_now_full_sync_with_an_empty_pick_restores_nothing(): void
-    {
-        // Ticking full sync and picking nothing is a deliberate
-        // restore-nothing — new rows still import (owner 2026-10-30).
-        $this->mock(NotionIssueSyncService::class)
-            ->shouldReceive('restorableIssues')->andReturn([])
-            ->shouldReceive('sync')->once()->with(false, true, [])
-            ->andReturn(['status' => 'ok', 'message' => 'No new issues.', 'created' => 0, 'skipped' => 0, 'preview' => null]);
-
-        $this->settingsPage()
-            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true])
-            ->assertNotified('No new issues.');
-    }
-
-    public function test_the_full_sync_picker_lists_the_restorable_deleted_issues(): void
+    public function test_reopening_the_sync_now_modal_starts_from_step_1_again(): void
     {
         $this->mock(NotionIssueSyncService::class)
-            ->shouldReceive('restorableIssues')->once()->andReturn([
-                'aaaa556e44dd81c395b0c542f2599aaa' => 'DB down (2026-01-12, P2)',
-            ]);
-
-        $this->settingsPage()
-            ->mountFormComponentAction('syncNowAction', 'syncNow')
-            ->setFormComponentActionData(['restoreDeleted' => true])
-            ->assertFormComponentActionMounted('syncNowAction', ['syncNow'])
-            ->assertSee('Deleted issues to restore')
-            ->assertSee('DB down (2026-01-12, P2)');
-    }
-
-    public function test_the_preview_button_mounts_a_modal_with_the_dry_run_results(): void
-    {
-        // Owner 2026-10-30: Preview opens a centered modal showing the dry
-        // run — not a toast. The dry run itself happens when the modal opens.
-        $this->mock(NotionIssueSyncService::class)
-            ->shouldReceive('sync')->once()->with(true, true)
-            ->andReturn(['status' => 'ok', 'message' => 'Would import 1 issue(s); 1 duplicate title(s).', 'created' => 1, 'skipped' => 1, 'preview' => "- Brand new row (2026-07-01, P3)\n- Duplicate title (already in the dashboard): Already there"]);
-
-        $this->settingsPage()
-            ->mountFormComponentAction('previewSyncAction', 'previewSync')
-            ->assertFormComponentActionMounted('previewSyncAction', ['previewSync'])
-            ->assertSee('Would import 1 issue(s); 1 duplicate title(s).')
-            ->assertSee('Brand new row (2026-07-01, P3)')
-            ->assertSee('Continue full sync')
-            ->assertSee('Close');
-    }
-
-    public function test_continuing_from_the_preview_opens_the_full_sync_picker_pre_ticked(): void
-    {
-        $this->mock(NotionIssueSyncService::class)
-            // Mounting the preview modal renders its content — the dry run.
-            ->shouldReceive('sync')->once()->with(true, true)
-            ->andReturn(['status' => 'ok', 'message' => 'Would restore 1 issue(s).', 'created' => 1, 'skipped' => 0, 'preview' => null])
-            // Continue NEVER syncs by itself — only the picker's confirm does.
-            ->shouldReceive('sync')->with(false, true, Mockery::any())->never()
             ->shouldReceive('restorableIssues')->andReturn([
                 'aaaa556e44dd81c395b0c542f2599aaa' => 'DB down (2026-01-12, P2)',
             ]);
 
-        $this->settingsPage()
-            // callFormComponentAction mounts the preview itself (the dry run
-            // renders on mount), then submits it — the continue event fires.
-            ->callFormComponentAction('previewSyncAction', 'previewSync')
-            // The preview swapped for the picker, full sync pre-ticked.
-            ->assertFormComponentActionMounted('syncNowAction', ['syncNow'])
-            ->assertFormComponentActionDataSet(['restoreDeleted' => true]);
+        $page = $this->settingsPage()
+            ->callFormComponentAction('syncNowAction', 'syncNow', data: ['restoreDeleted' => true]);
+
+        $this->assertTrue($page->instance()->fullSyncPickerOpen);
+
+        // The X / Cancel closes the modal; the next "Sync now" opens step 1.
+        $page
+            ->call('unmountFormComponentAction', false, false)
+            ->call('mountFormComponentAction', 'data.syncNowAction', 'syncNow');
+
+        $this->assertFalse($page->instance()->fullSyncPickerOpen);
+        $this->assertSame('Sync', $this->submitLabel($page));
     }
 
     public function test_the_full_sync_picker_carries_a_select_all_toggle(): void
     {
-        $picker = NotionSyncAction::form()[2];
+        $picker = NotionSyncAction::form()[1];
 
         $this->assertTrue($picker->isBulkToggleable());
     }
@@ -137,6 +149,25 @@ class NotionSettingsSyncButtonsTest extends TestCase
         $this->settingsPage()
             ->assertActionDoesNotExist('syncNow')
             ->assertActionDoesNotExist('previewSync');
+    }
+
+    /**
+     * The modal footer's submit button, freshly resolved from the current
+     * Livewire state (the label/disabled closures re-evaluate per render).
+     */
+    private function submitAction($page): StaticAction
+    {
+        $submit = collect($page->instance()->getMountedFormComponentAction()->getVisibleModalFooterActions())
+            ->first(fn (StaticAction $action): bool => $action->getName() === 'submit');
+
+        $this->assertNotNull($submit);
+
+        return $submit;
+    }
+
+    private function submitLabel($page): string
+    {
+        return $page->instance()->getMountedFormComponentAction()->getModalSubmitActionLabel();
     }
 
     private function settingsPage()
