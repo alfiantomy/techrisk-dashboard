@@ -5,6 +5,18 @@ echo "Clearing Laravel & Docker Caches"
 echo "=================================="
 echo ""
 
+echo "0. Pre-flight: reset bootstrap cache + sync vendor to composer.lock..."
+# rm BEFORE any artisan call: a stale packages.php breaks artisan boot itself
+# (prod 2026-10-30: ScribeServiceProvider not found — manifest listed a removed dev pkg)
+docker compose exec app sh -c "rm -f bootstrap/cache/packages.php bootstrap/cache/services.php bootstrap/cache/config.php"
+# --no-scripts: composer script events (pre-package-uninstall) boot the app
+# mid-install and die on packages not yet installed; package:discover rebuilds
+# the manifest by hand (facade aliases like Mcp live there, not in config/app.php)
+docker compose exec app composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+docker compose exec app php artisan package:discover
+echo "  ✓ vendor synced, bootstrap caches clean"
+
+echo ""
 echo "1. Clearing Laravel application cache..."
 docker compose exec app php artisan cache:clear
 
